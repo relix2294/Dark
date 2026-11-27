@@ -100,3 +100,25 @@ export const stopList = pgTable(
   },
   (t) => [index('stop_list_store_idx').on(t.storeId, t.clearedAt)],
 );
+
+/** Уведомления клиенту (ТЗ §10): пуш через DC Next, SMS — если пуш не доставлен за 30 с. Ключ — против дублей. */
+export const notification = pgTable(
+  'notification',
+  {
+    ...base,
+    customerId: uuid('customer_id').notNull(),
+    orderId: uuid('order_id'),
+    kind: text('kind').notNull(),
+    dedupeKey: text('dedupe_key').notNull(),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    status: text('status').notNull().default('pending'),
+    sentAt: ts('sent_at'),
+    pushDeliveredAt: ts('push_delivered_at'),
+    smsDueAt: ts('sms_due_at'),
+    smsSentAt: ts('sms_sent_at'),
+    readAt: ts('read_at'),
+    error: text('error'),
+  },
+  (t) => [uniqueIndex('notification_dedupe_uq').on(t.dedupeKey), index('notification_customer_idx').on(t.customerId, t.createdAt), index('notification_status_idx').on(t.status)],
+);

@@ -23,6 +23,7 @@ export const OWNERSHIP = {
   kds: ['kdsItem', 'stopList'],
   dispatch: ['courier', 'courierShift', 'courierPosition', 'deliveryTask', 'courierPlan'],
   backoffice: ['parameter'],
+  notify: ['notification'],
   shared: ['outbox', 'idempotencyKey', 'auditLog'],
 };
 

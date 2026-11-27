@@ -112,3 +112,15 @@ export const AddressCreate = z.object({
 });
 export const AddressView = AddressCreate.extend({ id: Uuid, entrance: z.string().nullable(), floor: z.string().nullable(), flat: z.string().nullable(), comment: z.string().nullable() });
 export const AddressListView = z.object({ addresses: z.array(AddressView) });
+
+export const NotificationView = z.object({
+  id: Uuid,
+  order_id: Uuid.nullable(),
+  kind: z.string(),
+  title: z.string(),
+  body: z.string(),
+  created_at: z.iso.datetime(),
+  read: z.boolean(),
+});
+export const NotificationListView = z.object({ notifications: z.array(NotificationView), unread: z.number().int() });
+export const NotificationReadRequest = z.object({ ids: z.array(Uuid).min(1).max(100) });

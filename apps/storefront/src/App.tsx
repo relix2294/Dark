@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
-import type { AddressListView, AddressView, Brand, CartResponse, CatalogResponse, DishModifiers, ModifierSelection, OrderListView, OrderView, ResolveStoreResponse } from '@dark/contracts';
+import type { AddressListView, AddressView, Brand, CartResponse, CatalogResponse, DishModifiers, ModifierSelection, NotificationListView, OrderListView, OrderView, ResolveStoreResponse } from '@dark/contracts';
 import { ApiError, BRAND_RU, Badge, Button, Card, ErrorBanner, Field, MapView, ORDER_STATUS_RU, Screen, Spinner, createApi, somoni, statusTone, time } from '@dark/ui';
 
 type Address = z.infer<typeof AddressView>;
@@ -13,7 +13,7 @@ type Resolve = z.infer<typeof ResolveStoreResponse>;
 const api = createApi({ tokenKey: 'dark.store.token' });
 type Line = { product_id: string; qty: number; modifiers?: ModifierSelection };
 type CatalogItem = Catalog['items'][number];
-type Tab = 'shop' | 'orders';
+type Tab = 'shop' | 'orders' | 'notices';
 
 /**
  * Витрина клиента внутри DC Next (ТЗ §9): бренд → адрес → каталог → корзина → оформление → статус с картой → история.
@@ -58,7 +58,9 @@ function Shop({ onLogout }: { onLogout: () => void }) {
   const [address, setAddress] = useState<Address | null>(null);
   const [lines, setLines] = useState<Line[]>([]);
   const [promo, setPromo] = useState('');
-  const [tracking, setTracking] = useState<string | null>(null);
+  // ссылка из уведомления (?order=…) сразу открывает отслеживание заказа
+  const [tracking, setTracking] = useState<string | null>(() => new URLSearchParams(location.search).get('order'));
+  const notices = useQuery({ queryKey: ['notices'], queryFn: () => api.get<z.infer<typeof NotificationListView>>('/notifications'), refetchInterval: 15_000 });
 
   const addresses = useQuery({ queryKey: ['addresses'], queryFn: () => api.get<z.infer<typeof AddressListView>>('/addresses') });
   useEffect(() => {
@@ -118,7 +120,9 @@ function Shop({ onLogout }: { onLogout: () => void }) {
       }
       actions={<Button onClick={onLogout}>Выйти</Button>}
     >
-      {tab === 'orders' ? (
+      {tab === 'notices' ? (
+        <Notices data={notices.data} onOpen={setTracking} />
+      ) : tab === 'orders' ? (
         <History onOpen={setTracking} />
       ) : (
         <>
@@ -223,6 +227,9 @@ function Shop({ onLogout }: { onLogout: () => void }) {
       <nav className="bottom-nav">
         <button className={tab === 'shop' ? 'active' : ''} onClick={() => setTab('shop')}>Каталог</button>
         <button className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>Мои заказы</button>
+        <button className={tab === 'notices' ? 'active' : ''} onClick={() => setTab('notices')}>
+          Уведомления{notices.data?.unread ? ` (${notices.data.unread})` : ''}
+        </button>
       </nav>
     </Screen>
   );
@@ -424,5 +431,30 @@ function ModifierPicker({ item, def, onDone, onCancel }: { item: CatalogItem; de
         </Button>
       </Card>
     </div>
+  );
+}
+
+/** Лента уведомлений (ТЗ §10): то же, что пришло пушем или SMS; открытие отмечает прочитанным. */
+function Notices({ data, onOpen }: { data: z.infer<typeof NotificationListView> | undefined; onOpen: (orderId: string) => void }) {
+  const qc = useQueryClient();
+  const unreadIds = (data?.notifications ?? []).filter((n) => !n.read).map((n) => n.id);
+  useEffect(() => {
+    if (unreadIds.length) void api.post('/notifications/read', { ids: unreadIds }).then(() => qc.invalidateQueries({ queryKey: ['notices'] }));
+    // отмечаем то, что увидели при открытии вкладки
+  }, [unreadIds.join(',')]);
+  if (!data) return <Spinner />;
+  if (data.notifications.length === 0) return <div className="empty">Уведомлений пока нет</div>;
+  return (
+    <>
+      {data.notifications.map((n) => (
+        <Card key={n.id} tone={n.read ? undefined : 'yellow'} onClick={n.order_id ? () => onOpen(n.order_id!) : undefined}>
+          <div className="row">
+            <b>{n.title}</b>
+            <span className="muted">{time(n.created_at)}</span>
+          </div>
+          <div>{n.body}</div>
+        </Card>
+      ))}
+    </>
   );
 }

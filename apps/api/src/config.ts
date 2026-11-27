@@ -18,6 +18,8 @@ const Env = z.object({
   S3_BUCKET: z.string().optional(),
   S3_ACCESS_KEY_ID: z.string().optional(),
   S3_SECRET_ACCESS_KEY: z.string().optional(),
+  /** Публичный адрес сайта для ссылок в уведомлениях (https://dark.example.tj); пусто — относительные. */
+  PUBLIC_URL: z.string().default(''),
   /** CORS: в продакшене — через запятую; пусто — запрещено (фронты и API на одном домене за Caddy). */
   CORS_ORIGINS: z.string().default(''),
   /** Токен для /metrics; пусто — эндпоинт открыт (закрыть на уровне сети). */

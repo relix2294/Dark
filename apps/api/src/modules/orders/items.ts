@@ -53,7 +53,7 @@ export async function addReplacementItem(
     topic: 'order.item_replaced',
     aggregateType: 'order',
     aggregateId: original.orderId,
-    payload: { from: original.productId, to: replacement.id, qty: original.qtyOrdered },
+    payload: { item_id: original.id, from: original.productId, to: replacement.id, qty: original.qtyOrdered },
   });
   return ni!;
 }

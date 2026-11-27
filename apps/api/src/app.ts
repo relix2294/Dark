@@ -1,4 +1,4 @@
-import Fastify, { type FastifyError } from 'fastify';
+import Fastify, { LogController, type FastifyError } from 'fastify';
 import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
 import swagger from '@fastify/swagger';
@@ -33,6 +33,7 @@ import { isStaffActive, registerStaffAdmin } from './modules/customers/index.js'
 import { registerWmsAdmin } from './modules/wms/index.js';
 import { registerCourierPlan } from './modules/dispatch/index.js';
 import { registerRealtime } from './modules/realtime/index.js';
+import { StubChannel, registerNotify, type CustomerChannel } from './modules/notify/index.js';
 import { registerWms } from './modules/wms/index.js';
 import { registerKds } from './modules/kds/index.js';
 import { registerDispatch } from './modules/dispatch/index.js';
@@ -45,6 +46,7 @@ export type AppDeps = {
   tokens: TokenService;
   wallet: WalletAdapter;
   storage: Storage;
+  channel: CustomerChannel;
 };
 
 export function createDeps(config: Config, over: Partial<AppDeps> = {}): AppDeps & { close: () => Promise<void> } {
@@ -57,6 +59,7 @@ export function createDeps(config: Config, over: Partial<AppDeps> = {}): AppDeps
     tokens: over.tokens ?? new TokenService(config.JWT_SECRET),
     wallet: over.wallet ?? new StubWalletAdapter(clock),
     storage: over.storage ?? createStorage(config),
+    channel: over.channel ?? new StubChannel(config.NODE_ENV === 'test' ? { info: () => undefined } : console),
     close,
   };
 }
@@ -76,8 +79,7 @@ export async function buildApp(deps: AppDeps) {
     trustProxy: deps.config.NODE_ENV === 'production' ? (_addr: string, hop: number) => hop < 1 : false,
     logger: loggerOptions(deps.config.LOG_LEVEL, deps.config.NODE_ENV === 'development'),
     genReqId: (req) => (req.headers['x-request-id'] as string | undefined) ?? randomUUID(),
-    requestIdLogLabel: 'request_id',
-    disableRequestLogging: deps.config.NODE_ENV === 'test',
+    logController: new LogController({ requestIdLogLabel: 'request_id', disableRequestLogging: deps.config.NODE_ENV === 'test' }),
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
@@ -158,6 +160,7 @@ export async function buildApp(deps: AppDeps) {
       await registerCourierPlan(api, deps);
       await registerReports(api, deps);
       await registerRealtime(api, deps);
+      await registerNotify(api, deps);
     },
     { prefix: '/api/v1' },
   );

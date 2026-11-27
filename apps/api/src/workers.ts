@@ -4,7 +4,7 @@ import { eq, and, lt, sql } from 'drizzle-orm';
 import type { AppDeps } from './app.js';
 import { OutboxRelay } from './shared/events/outbox.js';
 import { courierPosition, idempotencyKey, store } from './shared/db/schema/index.js';
-import { registerNotifySubscribers } from './modules/notify/index.js';
+import { detectDelays, registerNotifySubscribers, sendPending, smsFallback } from './modules/notify/index.js';
 import { registerRealtimeSubscriber } from './modules/realtime/index.js';
 import { dispatchStore } from './modules/dispatch/index.js';
 import { CAPTURE_RETRY_DELAYS_SEC, executeCapture, nightlyReconcile, reconcilePending, releaseOrphanHolds, warnExpiringHolds } from './modules/payments/index.js';
@@ -27,7 +27,7 @@ export async function startWorkers(deps: AppDeps, log: FastifyBaseLogger) {
   await boss.start();
 
   const relay = new OutboxRelay(deps.db, log);
-  registerNotifySubscribers(relay, log);
+  registerNotifySubscribers(relay, deps, log);
   registerRealtimeSubscriber(relay, deps.db);
 
   for (const q of ['outbox.relay', 'payments.reconcile', 'payments.capture', 'payments.nightly', 'dispatch.tick', 'housekeeping']) await boss.createQueue(q);
@@ -36,6 +36,9 @@ export async function startWorkers(deps: AppDeps, log: FastifyBaseLogger) {
     let n = 0;
     do n = await relay.tick();
     while (n > 0);
+    // уведомления клиенту: отправка сразу за событиями, SMS — когда пуш не доставлен за 30 с
+    await sendPending(deps);
+    await smsFallback(deps);
   });
 
   await boss.work('dispatch.tick', async () => {
@@ -54,6 +57,7 @@ export async function startWorkers(deps: AppDeps, log: FastifyBaseLogger) {
     const r = await reconcilePending(deps);
     if (r.failedOrderIds.length) await markPaymentFailed(deps, r.failedOrderIds);
     for (const paymentId of r.retryCaptureIds) await boss.send('payments.capture', { paymentId, attempt: 0 }, { singletonKey: paymentId, singletonSeconds: 60 });
+    await detectDelays(deps);
     const orphans = await releaseOrphanHolds(deps);
     if (orphans.length) log.warn({ order_ids: orphans }, 'payments: сняты холды у завершённых заказов');
     await warnExpiringHolds(deps);
