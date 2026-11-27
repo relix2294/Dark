@@ -37,3 +37,13 @@ export const COURIER_STATUS_RU: Record<string, string> = {
 };
 
 export const BRAND_RU: Record<string, string> = { LAB: 'Lablabu', SOR: 'Sor Box' };
+
+/** Русское склонение по числу: plural(2, 'нажатие', 'нажатия', 'нажатий') → «нажатия». */
+export const plural = (n: number, one: string, few: string, many: string): string => {
+  const a = Math.abs(n) % 100;
+  const b = a % 10;
+  if (a >= 11 && a <= 14) return many;
+  if (b === 1) return one;
+  if (b >= 2 && b <= 4) return few;
+  return many;
+};

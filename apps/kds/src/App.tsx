@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
 import type { KdsItemView, KdsPackListView, KdsQueueView, StopListView, Station } from '@dark/contracts';
-import { Badge, Button, Card, ErrorBanner, Screen, Spinner, liveTitle, minutesLeft, time, useLive, useStaff } from '@dark/ui';
+import { Badge, Button, Card, ErrorBanner, Screen, Spinner, liveTitle, minutesLeft, plural, postOrQueue, time, useLive, useOfflineQueue, useStaff } from '@dark/ui';
 
 type Queue = z.infer<typeof KdsQueueView>;
 type Item = z.infer<typeof KdsItemView>;
@@ -44,20 +44,65 @@ export function App() {
   );
 }
 
+/** Последняя очередь станции с сервера: без связи и после перезагрузки повар видит свои блюда (ТЗ §11). */
+const cacheKey = (station: Station) => `dark.kds.queue.${station}`;
+function cachedQueue(station: Station): Queue | undefined {
+  try {
+    const v = localStorage.getItem(cacheKey(station));
+    return v ? (JSON.parse(v) as Queue) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function StationQueue({ station }: { station: Station }) {
   const { api } = useStaff();
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ['kds', station], queryFn: () => api.get<Queue>(`/kds/queue?station=${station}`) });
-  const act = useMutation({
-    mutationFn: (p: { id: string; action: 'start' | 'done' }) => api.post<Item>(`/kds/items/${p.id}/${p.action}`),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['kds', station] }),
+  const q = useQuery({
+    queryKey: ['kds', station],
+    queryFn: async () => {
+      const data = await api.get<Queue>(`/kds/queue?station=${station}`);
+      try {
+        localStorage.setItem(cacheKey(station), JSON.stringify(data));
+      } catch {
+        /* без копии */
+      }
+      return data;
+    },
+    initialData: () => cachedQueue(station),
+    initialDataUpdatedAt: 0,
   });
-  if (q.isLoading) return <Spinner />;
-  const items = q.data?.items ?? [];
+  // нажатия без связи копятся с временем нажатия и уходят по порядку (ТЗ §11)
+  const queue = useOfflineQueue<Item>(api, 'dark.kds.actions', () => void qc.invalidateQueries({ queryKey: ['kds'] }));
+  const act = useMutation({
+    mutationFn: (p: { id: string; name: string; action: 'start' | 'done' }) =>
+      postOrQueue<Item>(api, queue, `/kds/items/${p.id}/${p.action}`, { at: new Date().toISOString() }, `${p.action === 'start' ? 'начать' : 'готово'}: ${p.name}`),
+    onSuccess: (r) => {
+      if (!r.queued) void qc.invalidateQueries({ queryKey: ['kds', station] });
+    },
+  });
+  if (q.isLoading && !q.data) return <Spinner />;
+  // нажатое, но не дошедшее до сервера, показываем сделанным
+  const queued = new Set(queue.items.map((a) => a.path));
+  const now = new Date().toISOString();
+  const items = (q.data?.items ?? []).map((i) =>
+    queued.has(`/kds/items/${i.id}/done`)
+      ? { ...i, started_at: i.started_at ?? now, done_at: now, color: 'done' as const }
+      : queued.has(`/kds/items/${i.id}/start`)
+        ? { ...i, started_at: now }
+        : i,
+  );
   const inWork = items.filter((i) => i.started_at && !i.done_at).length;
   return (
     <>
-      <ErrorBanner error={q.error ?? act.error} />
+      <ErrorBanner error={queue.items.length || q.data ? act.error : (q.error ?? act.error)} />
+      {queue.items.length > 0 && <div className="banner">Нет связи — {queue.items.length} {plural(queue.items.length, 'нажатие ждёт', 'нажатия ждут', 'нажатий ждут')} отправки. Работайте дальше, отправим сами.</div>}
+      {q.error != null && queue.items.length === 0 && q.data && <div className="banner">Нет связи с сервером — показана последняя очередь. Новые заказы появятся, когда связь вернётся.</div>}
+      {queue.failed.map((f) => (
+        <div key={f.key} className="banner banner-error" onClick={queue.clearFailed}>
+          «{f.label}» не принято сервером: {f.error}
+        </div>
+      ))}
       <div className="muted">
         В работе: {inWork} · в очереди: {items.filter((i) => !i.started_at).length}
       </div>
@@ -79,12 +124,12 @@ function StationQueue({ station }: { station: Station }) {
               </div>
             )}
             {!i.started_at && (
-              <Button big primary={i.color !== 'grey'} disabled={act.isPending} onClick={() => act.mutate({ id: i.id, action: 'start' })}>
+              <Button big primary={i.color !== 'grey'} disabled={act.isPending} onClick={() => act.mutate({ id: i.id, name: i.name, action: 'start' })}>
                 {i.color === 'grey' ? 'Начать раньше' : 'Начать'}
               </Button>
             )}
             {i.started_at && !i.done_at && (
-              <Button big primary disabled={act.isPending} onClick={() => act.mutate({ id: i.id, action: 'done' })}>
+              <Button big primary disabled={act.isPending} onClick={() => act.mutate({ id: i.id, name: i.name, action: 'done' })}>
                 Готово
               </Button>
             )}

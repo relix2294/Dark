@@ -4,6 +4,7 @@ import type { AppDeps } from '../../app.js';
 import type { Tx } from '../../shared/db/client.js';
 import { kdsItem, order, orderItem, stopList } from '../../shared/db/schema/index.js';
 import { AppError, notFound } from '../../shared/errors/index.js';
+import { eventTime } from '../../shared/event-time.js';
 import { publish } from '../../shared/events/outbox.js';
 import { loadParams } from '../../shared/params/load.js';
 import { getDishes } from '../catalog/index.js';
@@ -127,14 +128,14 @@ export async function queue(deps: AppDeps, me: StaffPrincipal, station: Station)
   });
 }
 
-export async function start(deps: AppDeps, me: StaffPrincipal, itemId: string) {
+export async function start(deps: AppDeps, me: StaffPrincipal, itemId: string, rawAt?: string) {
   const storeId = storeOf(me);
   const now = deps.clock.now();
   return deps.db.transaction(async (tx) => {
     const [k] = await tx.select().from(kdsItem).where(and(eq(kdsItem.id, itemId), eq(kdsItem.storeId, storeId))).for('update');
     if (!k) throw notFound('Блюдо', itemId);
     if (k.startedAt) throw new AppError('INVALID_TRANSITION', 'Блюдо уже в работе');
-    await tx.update(kdsItem).set({ startedAt: now }).where(eq(kdsItem.id, k.id));
+    await tx.update(kdsItem).set({ startedAt: eventTime(now, rawAt, k.createdAt < now ? k.createdAt : null) }).where(eq(kdsItem.id, k.id));
     const [o] = await tx.select().from(order).where(eq(order.id, k.orderId)).for('update');
     if (o?.brand === 'SOR' && o.status === 'paid_hold') await transition(tx, o.id, 'paid_hold', 'cooking', 'staff', me.staff_id);
     const [v] = await itemViews(tx, now, eq(kdsItem.id, k.id));
@@ -142,7 +143,7 @@ export async function start(deps: AppDeps, me: StaffPrincipal, itemId: string) {
   });
 }
 
-export async function done(deps: AppDeps, me: StaffPrincipal, itemId: string) {
+export async function done(deps: AppDeps, me: StaffPrincipal, itemId: string, rawAt?: string) {
   const storeId = storeOf(me);
   const now = deps.clock.now();
   return deps.db.transaction(async (tx) => {
@@ -150,9 +151,10 @@ export async function done(deps: AppDeps, me: StaffPrincipal, itemId: string) {
     if (!k) throw notFound('Блюдо', itemId);
     if (!k.startedAt) throw new AppError('INVALID_TRANSITION', 'Блюдо ещё не начато');
     if (k.doneAt) throw new AppError('INVALID_TRANSITION', 'Блюдо уже готово');
-    await tx.update(kdsItem).set({ doneAt: now }).where(eq(kdsItem.id, k.id));
-    if (now > k.targetReadyAt)
-      await publish(tx, { topic: 'kds.item_late', aggregateType: 'kds_item', aggregateId: k.id, payload: { order_id: k.orderId, store_id: k.storeId, late_sec: Math.round((now.getTime() - k.targetReadyAt.getTime()) / 1000) } });
+    const at = eventTime(now, rawAt, k.startedAt);
+    await tx.update(kdsItem).set({ doneAt: at }).where(eq(kdsItem.id, k.id));
+    if (at > k.targetReadyAt)
+      await publish(tx, { topic: 'kds.item_late', aggregateType: 'kds_item', aggregateId: k.id, payload: { order_id: k.orderId, store_id: k.storeId, late_sec: Math.round((at.getTime() - k.targetReadyAt.getTime()) / 1000) } });
     const [v] = await itemViews(tx, now, eq(kdsItem.id, k.id));
     return v!;
   });

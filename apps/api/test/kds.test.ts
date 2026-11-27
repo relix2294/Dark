@@ -146,4 +146,25 @@ describe('кухня (ТЗ §8)', () => {
     expect(moves).toHaveLength(1);
     expect(moves[0]!.reason).toContain('отмена после начала готовки');
   });
+
+  it('без связи: «начать» и «готово» по времени нажатия, опоздание — от него же (ТЗ §11)', async () => {
+    const r = await call('POST', '/api/v1/orders', w.token, {
+      brand: 'SOR', store_id: w.store.id, address_id: w.addr.id,
+      items: [{ product_id: pizza.id, qty: 1, modifiers: { size: ['30'] } }], expected_total_dirams: 6500 + 1500 + 1500,
+    });
+    expect(r.statusCode, r.body).toBe(201);
+    const [pz] = await ctx.deps.db.select().from(s.kdsItem).where(eq(s.kdsItem.orderId, r.json().id));
+    const target = pz!.targetReadyAt.getTime();
+    const iso = (min: number) => new Date(target + min * 60_000).toISOString();
+    // связь вернулась через 20 минут после готовности — очередь экрана уходит с временем нажатий
+    ctx.setNow(new Date(target + 20 * 60_000));
+    expect((await call('POST', `/api/v1/kds/items/${pz!.id}/start`, cook, { at: iso(-10) })).statusCode).toBe(200);
+    expect((await call('POST', `/api/v1/kds/items/${pz!.id}/done`, cook, { at: iso(5) })).statusCode).toBe(200);
+    const [k] = await ctx.deps.db.select().from(s.kdsItem).where(eq(s.kdsItem.id, pz!.id));
+    expect(k!.startedAt!.toISOString()).toBe(iso(-10));
+    expect(k!.doneAt!.toISOString()).toBe(iso(5));
+    const late = await ctx.deps.db.select().from(s.outbox).where(and(eq(s.outbox.topic, 'kds.item_late'), eq(s.outbox.aggregateId, pz!.id)));
+    expect(late[0]!.payload).toMatchObject({ late_sec: 300 });
+    ctx.setNow(new Date('2026-11-27T07:00:00Z'));
+  });
 });

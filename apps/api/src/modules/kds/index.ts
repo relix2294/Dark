@@ -4,7 +4,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { KdsItemIdParams, KdsItemView, KdsOrderIdParams, KdsPackListView, KdsQueueQuery, KdsQueueView, PackedView, StopListRequest, StopListView } from '@dark/contracts';
+import { KdsItemIdParams, KdsItemView, KdsOrderIdParams, KdsPackListView, KdsQueueQuery, KdsQueueView, PackedView, StopListRequest, StopListView, KdsActionRequest } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
 import { requireStaff } from '../../shared/auth/index.js';
 import * as svc from './service.js';
@@ -21,11 +21,11 @@ export async function registerKds(app: FastifyInstance, deps: AppDeps) {
     svc.queue(deps, requireStaff(req.principal, 'kds.queue'), req.query.station),
   );
   r.get('/kds/pack', { schema: { tags, security: sec, response: { 200: KdsPackListView } } }, async (req) => svc.packList(deps, requireStaff(req.principal, 'kds.queue')));
-  r.post('/kds/items/:id/start', { schema: { tags, security: sec, params: KdsItemIdParams, response: { 200: KdsItemView } } }, async (req) =>
-    svc.start(deps, requireStaff(req.principal, 'kds.queue'), req.params.id),
+  r.post('/kds/items/:id/start', { schema: { tags, security: sec, params: KdsItemIdParams, body: KdsActionRequest.nullish(), response: { 200: KdsItemView } } }, async (req) =>
+    svc.start(deps, requireStaff(req.principal, 'kds.queue'), req.params.id, req.body?.at),
   );
-  r.post('/kds/items/:id/done', { schema: { tags, security: sec, params: KdsItemIdParams, response: { 200: KdsItemView } } }, async (req) =>
-    svc.done(deps, requireStaff(req.principal, 'kds.queue'), req.params.id),
+  r.post('/kds/items/:id/done', { schema: { tags, security: sec, params: KdsItemIdParams, body: KdsActionRequest.nullish(), response: { 200: KdsItemView } } }, async (req) =>
+    svc.done(deps, requireStaff(req.principal, 'kds.queue'), req.params.id, req.body?.at),
   );
   r.post('/kds/orders/:id/packed', { schema: { tags, security: sec, params: KdsOrderIdParams, response: { 200: PackedView } } }, async (req) =>
     svc.packed(deps, requireStaff(req.principal, 'kds.queue'), req.params.id),

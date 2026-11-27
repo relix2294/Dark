@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
 import type { CourierSelfView, DeliveryTaskView, ShiftSummaryView } from '@dark/contracts';
-import { BRAND_RU, Badge, Button, COURIER_STATUS_RU, Card, ErrorBanner, Field, ORDER_STATUS_RU, Screen, Spinner, minutesLeft, postOrQueue, time, useBarcodeScanner, useLive, useOfflineQueue, useStaff } from '@dark/ui';
+import { BRAND_RU, Badge, Button, COURIER_STATUS_RU, Card, ErrorBanner, Field, ORDER_STATUS_RU, Screen, Spinner, minutesLeft, plural, postOrQueue, time, useBarcodeScanner, useLive, useOfflineQueue, useStaff } from '@dark/ui';
 
 type Me = z.infer<typeof CourierSelfView>;
 type Task = z.infer<typeof DeliveryTaskView>;
@@ -90,7 +90,7 @@ export function App() {
       <ErrorBanner error={actions.items.length ? null : (me.error ?? shift.error)} />
       {actions.items.length > 0 && (
         <div className="banner">
-          Нет связи — {actions.items.length} {actions.items.length === 1 ? 'действие ждёт' : 'действия ждут'} отправки: {actions.items.map((a) => a.label).join(', ')}. Отправим сами, когда появится сеть.
+          Нет связи — {actions.items.length} {plural(actions.items.length, 'действие ждёт', 'действия ждут', 'действий ждут')} отправки: {actions.items.map((a) => a.label).join(', ')}. Отправим сами, когда появится сеть.
         </div>
       )}
       {actions.failed.map((f) => (

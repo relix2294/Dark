@@ -5,7 +5,7 @@ import { seedWorld, setupApp } from './helpers.js';
 import * as s from '../src/shared/db/schema/index.js';
 import { hashPin } from '../src/shared/auth/index.js';
 import { dispatchStore } from '../src/modules/dispatch/index.js';
-import { eventTime } from '../src/modules/dispatch/service.js';
+import { eventTime } from '../src/shared/event-time.js';
 
 let ctx: Awaited<ReturnType<typeof setupApp>>;
 let w: Awaited<ReturnType<typeof seedWorld>>;

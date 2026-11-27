@@ -42,3 +42,6 @@ export const KdsPackOrderView = z.object({
 });
 export const KdsPackListView = z.object({ orders: z.array(KdsPackOrderView) });
 export const PackedView = z.object({ order_number: z.string(), barcode: z.string() });
+
+/** Начать / готово: время нажатия на экране кухни, если действие ждало связи (ТЗ §11). */
+export const KdsActionRequest = z.object({ at: z.iso.datetime().optional() });

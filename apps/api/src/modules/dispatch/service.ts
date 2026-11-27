@@ -6,6 +6,7 @@ import { courier, courierPosition, courierShift, deliveryTask, kdsItem, order, o
 import { AppError, notFound } from '../../shared/errors/index.js';
 import { publish } from '../../shared/events/outbox.js';
 import { distanceM, travelMinutes, type Geo } from '../../shared/geo.js';
+import { eventTime } from '../../shared/event-time.js';
 import { loadParams } from '../../shared/params/load.js';
 import { setCaptured, transition } from '../orders/index.js';
 import { markCustomerDelivered } from '../customers/index.js';
@@ -185,22 +186,6 @@ export async function accept(deps: AppDeps, me: StaffPrincipal, taskId: string) 
 }
 
 /** Скан ярлыков всех пакетов задания → заказы on_the_way, курьер delivering (ТЗ §3, §4). */
-/** Действие из очереди без связи старше суток не принимаем — его время уже ничего не значит для расчётов. */
-const EVENT_MAX_AGE_MS = 24 * 3600_000;
-
-/**
- * Время события курьера (ТЗ §11: сервер принимает события по времени события, а не получения).
- * Без at — сейчас. Из будущего — сейчас. Раньше предыдущего шага (floor) — время шага: порядок не нарушается.
- */
-export function eventTime(now: Date, raw: string | undefined, floor?: Date | null): Date {
-  if (!raw) return now;
-  const t = new Date(raw);
-  if (now.getTime() - t.getTime() > EVENT_MAX_AGE_MS) throw new AppError('VALIDATION', 'Событие старше суток — подтвердит старший смены', { at: raw });
-  if (t > now) return now; // часы телефона спешат — событие «сейчас»
-  if (floor && t < floor) return floor;
-  return t;
-}
-
 export async function pickup(deps: AppDeps, me: StaffPrincipal, taskId: string, barcodes: string[], rawAt?: string) {
   return deps.db.transaction(async (tx) => {
     const c = await courierOf(tx, me);
