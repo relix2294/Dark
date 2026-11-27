@@ -22,7 +22,7 @@ import * as svc from './service.js';
 
 export { planDispatch, type DispatchInput, type DispatchResult } from './planner.js';
 export { taskMachine, courierMachine } from './state-machine.js';
-export { dispatchStore, manualAssign, markReturned, consoleCouriers, courierForOrder } from './service.js';
+export { dispatchStore, detachOrder, manualAssign, markReturned, consoleCouriers, courierForOrder } from './service.js';
 export { ensureCourier, registerCourierPlan } from './plan.js';
 
 export async function registerDispatch(app: FastifyInstance, deps: AppDeps) {

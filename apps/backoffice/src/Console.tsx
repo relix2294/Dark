@@ -2,14 +2,14 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { ConsoleCouriersView, ConsoleOrdersView } from '@dark/contracts';
-import { BRAND_RU, Badge, Button, COURIER_STATUS_RU, Card, ErrorBanner, Field, ORDER_STATUS_RU, somoni, statusTone, time, useStaff } from '@dark/ui';
+import { BRAND_RU, Badge, Button, COURIER_STATUS_RU, Card, ErrorBanner, Field, MapView, ORDER_STATUS_RU, somoni, statusTone, time, useStaff, type MapMarker } from '@dark/ui';
 
 type Orders = z.infer<typeof ConsoleOrdersView>;
 type Couriers = z.infer<typeof ConsoleCouriersView>;
 type Order = Orders['orders'][number];
 
 /** Пульт: все заказы точки по статусам, курьеры, ручное назначение, отмена, возврат, тревоги (ТЗ §9). */
-export function Console({ storeId }: { storeId: string }) {
+export function Console({ storeId, storeGeo }: { storeId: string; storeGeo: { lat: number; lon: number } | null }) {
   const { api } = useStaff();
   const qc = useQueryClient();
   const orders = useQuery({ queryKey: ['console-orders', storeId], queryFn: () => api.get<Orders>(`/console/stores/${storeId}/orders`) });
@@ -68,7 +68,8 @@ export function Console({ storeId }: { storeId: string }) {
           </table>
           {orders.data && orders.data.orders.length === 0 && <div className="empty">Активных заказов нет</div>}
         </div>
-        <div style={{ flex: 1, minWidth: 260, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ flex: 1, minWidth: 320, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {storeGeo && <MapView center={storeGeo} height={300} fit markers={mapMarkers(storeGeo, orders.data?.orders ?? [], couriers.data?.couriers ?? [])} />}
           <h2>Курьеры</h2>
           {(couriers.data?.couriers ?? []).map((c) => (
             <Card key={c.courier_id}>
@@ -165,4 +166,12 @@ function OrderActions({ storeId, order, couriers, onClose }: { storeId: string; 
       )}
     </div>
   );
+}
+
+/** Точка — синяя, курьеры — зелёные (свободен) или оранжевые (в работе), адреса заказов — по статусу. */
+function mapMarkers(store: { lat: number; lon: number }, orders: Order[], couriers: Couriers['couriers']): MapMarker[] {
+  const out: MapMarker[] = [{ id: 'store', ...store, color: '#4f8cff', label: 'Точка' }];
+  for (const c of couriers) if (c.position) out.push({ id: c.courier_id, ...c.position, color: c.status === 'free' ? '#3ccf7a' : '#ff9f43', label: c.name.split(' ').pop() ?? c.name, title: c.status });
+  for (const o of orders) if (o.geo && ['ready', 'on_the_way', 'picking', 'cooking'].includes(o.status)) out.push({ id: o.id, ...o.geo, color: o.status === 'on_the_way' ? '#8fb3ff' : '#ff5b5b', radius: 6, title: `${o.number} · ${ORDER_STATUS_RU[o.status]}` });
+  return out;
 }

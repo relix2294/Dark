@@ -292,6 +292,12 @@ export async function dispatchStore(deps: AppDeps, storeId: string): Promise<{ a
       await publish(tx, { topic: 'task.expired', aggregateType: 'delivery_task', aggregateId: t.id, payload: { courier_id: t.courierId, order_ids: t.orderIds } });
     }
 
+    // задания, все заказы которых уже отменены (например, отмена прошла в обход сервиса) — закрываем
+    const stale = await tx.execute<{ order_id: string }>(sql`
+      select o.id order_id from delivery_task t join "order" o on o.id = any(t.order_ids)
+      where t.store_id = ${storeId} and t.status in ('offered','accepted','at_store') and o.status in ('cancelled','payment_failed')`);
+    for (const r of stale.rows) await detachOrder(tx, r.order_id, 'заказ отменён');
+
     const busyOrders = tx.select({ id: sql<string>`unnest(${deliveryTask.orderIds})` }).from(deliveryTask).where(inArray(deliveryTask.status, [...TASK_ACTIVE]));
     const candidates = await tx
       .select()
@@ -369,6 +375,28 @@ export async function dispatchStore(deps: AppDeps, storeId: string): Promise<{ a
     }
     return { assigned: plan.assignments.length, alerts };
   });
+}
+
+/**
+ * Заказ отменён до выезда: снять его с задания курьера. Пустое задание закрывается, курьер снова свободен.
+ * После pickup заказ отменить нельзя (машина состояний), поэтому трогаем только offered / accepted / at_store.
+ */
+export async function detachOrder(tx: Tx, orderId: string, reason: string) {
+  const [t] = await tx
+    .select()
+    .from(deliveryTask)
+    .where(and(inArray(deliveryTask.status, ['offered', 'accepted', 'at_store']), sql`${orderId} = any(${deliveryTask.orderIds})`))
+    .for('update');
+  if (!t) return;
+  const rest = t.orderIds.filter((id) => id !== orderId);
+  if (rest.length) {
+    await tx.update(deliveryTask).set({ orderIds: rest }).where(eq(deliveryTask.id, t.id));
+    return;
+  }
+  if (t.status === 'offered') await setTaskStatus(tx, t, 'expired', 'system', { finishedAt: new Date(), overrideReason: reason });
+  else await setTaskStatus(tx, t, 'reassigned', 'shift_lead', { finishedAt: new Date(), overrideReason: reason });
+  const [c] = await tx.select().from(courier).where(eq(courier.id, t.courierId)).for('update');
+  if (c?.status === 'assigned') await setCourierStatus(tx, c, 'free', 'system');
 }
 
 /** Ручное назначение или переназначение старшим смены — причина обязательна, пишется в задание (ТЗ §6). */

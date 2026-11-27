@@ -20,6 +20,7 @@ export const ConsoleOrderView = z.object({
   /** Минут ожидания курьера для ready-заказов без курьера. */
   waiting_min: z.number().nullable(),
   address_short: z.string(),
+  geo: Geo.nullable(),
 });
 export const ConsoleOrdersView = z.object({ orders: z.array(ConsoleOrderView) });
 

@@ -170,6 +170,11 @@ describe('курьер и диспетчер (ТЗ §6, §11)', () => {
     expect(ord).toMatchObject({ status: 'cancelled', cancelReason: 'клиент попросил' });
     const audit = await ctx.deps.db.select().from(s.auditLog).where(and(eq(s.auditLog.action, 'order.cancel'), eq(s.auditLog.objectId, o.id)));
     expect(audit[0]!.actorId).toBe(leadId);
+    // назначенный курьер освобождается, задание закрыто с причиной
+    const [t2] = await ctx.deps.db.select().from(s.deliveryTask).where(eq(s.deliveryTask.id, as.json().task_id));
+    expect(t2).toMatchObject({ status: 'reassigned', overrideReason: 'заказ отменён: клиент попросил' });
+    const [cr] = await ctx.deps.db.select().from(s.courier).where(eq(s.courier.id, courierId));
+    expect(cr!.status).toBe('free');
   });
 
   it('сверка: холд без ответа банка 60 с → payment_failed, резерв снят', async () => {

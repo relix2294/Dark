@@ -5,3 +5,4 @@ export * from './format.js';
 export * from './scanner.js';
 export * from './realtime.js';
 export * from './offline.js';
+export * from './map.js';

@@ -12,7 +12,7 @@ import { applyPromo, countUses, findPromo, recordUse } from '../promo/index.js';
 import { reserveForOrder, unreserve } from '../wms/index.js';
 import { enqueueOrder } from '../kds/index.js';
 import { applyHoldResult, captureAmountNow, openHold, releaseHold } from '../payments/index.js';
-import { courierForOrder } from '../dispatch/index.js';
+import { courierForOrder, detachOrder } from '../dispatch/index.js';
 import type { StaffPrincipal } from '@dark/contracts';
 import { percentOf } from '../../shared/money.js';
 import { travelMinutes } from '../../shared/geo.js';
@@ -202,6 +202,7 @@ export async function cancelByCustomer(deps: AppDeps, me: CustomerPrincipal, ord
     await unreserve(tx, items.map((i) => i.id));
     await releaseHold(tx, deps, o.id);
     await tx.update(order).set({ cancelReason: reason ?? 'клиент' }).where(eq(order.id, o.id));
+    await detachOrder(tx, o.id, 'заказ отменён клиентом');
     await transition(tx, o.id, o.status, 'cancelled', 'customer', me.customer_id, { reason });
   });
   return getOrderView(deps, orderId, me);
@@ -276,6 +277,7 @@ export async function cancelByStaff(deps: AppDeps, me: StaffPrincipal, orderId: 
     let fee = 0;
     if (o.brand === 'SOR' && ['cooking', 'ready'].includes(o.status)) fee = percentOf(o.itemsTotalDirams, DEFAULT_PARAMS.SOR_CANCEL_FEE_PCT);
     await tx.update(order).set({ cancelReason: reason, capturedDirams: fee }).where(eq(order.id, o.id));
+    await detachOrder(tx, o.id, `заказ отменён: ${reason}`);
     await transition(tx, o.id, o.status, 'cancelled', 'staff', me.staff_id, { reason, fee_dirams: fee });
     if (fee === 0) await releaseHold(tx, deps, o.id);
     return { fee };
@@ -321,6 +323,7 @@ export async function consoleOrders(deps: AppDeps, storeId: string) {
       courier: c ? { courier_id: c.courier_id, name: c.name, task_status: c.task_status } : null,
       waiting_min: o.status === 'ready' && !c && o.readyAt ? Math.round((now.getTime() - o.readyAt.getTime()) / 60_000) : null,
       address_short: `${String(a['street'] ?? '')} ${String(a['house'] ?? '')}`.trim(),
+      geo: typeof a['lat'] === 'number' && typeof a['lon'] === 'number' ? { lat: a['lat'], lon: a['lon'] } : null,
     });
   }
   return { orders: out };

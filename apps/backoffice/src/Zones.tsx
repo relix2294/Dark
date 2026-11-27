@@ -2,12 +2,12 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
 import type { ZoneListView, ZoneView } from '@dark/contracts';
-import { BRAND_RU, Badge, Button, Card, ErrorBanner, Field, somoni, useStaff } from '@dark/ui';
+import { BRAND_RU, Badge, Button, Card, ErrorBanner, Field, MapView, somoni, useStaff } from '@dark/ui';
 
 type Zone = z.infer<typeof ZoneView>;
 
 /** Зоны доставки точки: тариф, минимальный заказ, время. Полигон — JSON [[lon, lat], …] (редактор на карте — следующий шаг). */
-export function Zones({ storeId }: { storeId: string }) {
+export function Zones({ storeId, storeGeo }: { storeId: string; storeGeo: { lat: number; lon: number } | null }) {
   const { api } = useStaff();
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['zones', storeId], queryFn: () => api.get<z.infer<typeof ZoneListView>>(`/admin/stores/${storeId}/zones`) });
@@ -21,6 +21,15 @@ export function Zones({ storeId }: { storeId: string }) {
         </Button>
       </div>
       <ErrorBanner error={q.error} />
+      {storeGeo && (
+        <MapView
+          center={storeGeo}
+          height={360}
+          fit
+          markers={[{ id: 'store', ...storeGeo, color: '#4f8cff', label: 'Точка' }]}
+          polygons={(q.data?.zones ?? []).filter((z) => z.is_active).map((z) => ({ id: z.id, points: z.polygon, color: z.brand === 'LAB' ? '#3ccf7a' : '#ff9f43' }))}
+        />
+      )}
       <div className="grid">
         {(q.data?.zones ?? []).map((zn) => (
           <Card key={zn.id} tone={zn.is_active ? undefined : 'grey'} onClick={() => setEdit(zn)}>
@@ -37,12 +46,12 @@ export function Zones({ storeId }: { storeId: string }) {
           </Card>
         ))}
       </div>
-      {edit && <ZoneEditor storeId={storeId} zone={edit === 'new' ? null : edit} onClose={() => { setEdit(null); void qc.invalidateQueries({ queryKey: ['zones', storeId] }); }} />}
+      {edit && <ZoneEditor storeId={storeId} storeGeo={storeGeo} zone={edit === 'new' ? null : edit} onClose={() => { setEdit(null); void qc.invalidateQueries({ queryKey: ['zones', storeId] }); }} />}
     </>
   );
 }
 
-function ZoneEditor({ storeId, zone, onClose }: { storeId: string; zone: Zone | null; onClose: () => void }) {
+function ZoneEditor({ storeId, storeGeo, zone, onClose }: { storeId: string; storeGeo: { lat: number; lon: number } | null; zone: Zone | null; onClose: () => void }) {
   const { api } = useStaff();
   const [f, setF] = useState({
     brand: zone?.brand ?? 'LAB',
@@ -97,8 +106,23 @@ function ZoneEditor({ storeId, zone, onClose }: { storeId: string; zone: Zone | 
             <input className="input" value={f.eta_max} onChange={(e) => setF({ ...f, eta_max: e.target.value })} />
           </Field>
         </div>
+        {storeGeo && (
+          <>
+            <div className="row">
+              <span className="muted">Кликайте по карте — каждая точка добавляет вершину зоны (минимум 3).</span>
+              <Button onClick={() => setF({ ...f, polygon: '[]' })}>Очистить</Button>
+            </div>
+            <MapView
+              center={storeGeo}
+              height={320}
+              onClick={(p) => setF({ ...f, polygon: JSON.stringify([...safePoly(f.polygon), [round(p.lon), round(p.lat)]]) })}
+              markers={[{ id: 'store', ...storeGeo, color: '#4f8cff', label: 'Точка' }, ...safePoly(f.polygon).map(([lon, lat], i) => ({ id: `v${i}`, lat, lon, color: '#ffc14d', radius: 5 }))]}
+              polygons={safePoly(f.polygon).length >= 3 ? [{ id: 'edit', points: safePoly(f.polygon), color: '#ffc14d', dashed: true }] : []}
+            />
+          </>
+        )}
         <Field label="Полигон [[lon, lat], …]">
-          <textarea className="input" rows={4} value={f.polygon} onChange={(e) => setF({ ...f, polygon: e.target.value })} />
+          <textarea className="input" rows={3} value={f.polygon} onChange={(e) => setF({ ...f, polygon: e.target.value })} />
         </Field>
         <label className="row" style={{ justifyContent: 'flex-start', gap: 6 }}>
           <input type="checkbox" checked={f.is_active} onChange={(e) => setF({ ...f, is_active: e.target.checked })} /> зона активна
@@ -114,4 +138,14 @@ function ZoneEditor({ storeId, zone, onClose }: { storeId: string; zone: Zone | 
       </Card>
     </div>
   );
+}
+
+const round = (x: number) => Math.round(x * 1e6) / 1e6;
+function safePoly(s: string): [number, number][] {
+  try {
+    const v = JSON.parse(s) as unknown;
+    return Array.isArray(v) ? (v.filter((p) => Array.isArray(p) && p.length === 2) as [number, number][]) : [];
+  } catch {
+    return [];
+  }
 }

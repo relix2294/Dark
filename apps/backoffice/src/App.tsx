@@ -83,10 +83,10 @@ export function App() {
         <div className="empty">Нет точки</div>
       ) : (
         {
-          console: <Console storeId={store} />,
+          console: <Console storeId={store} storeGeo={stores.data?.stores.find((x) => x.id === store)?.geo ?? null} />,
           catalog: <Catalog storeId={store} />,
           warehouse: <Warehouse storeId={store} />,
-          zones: <Zones storeId={store} />,
+          zones: <Zones storeId={store} storeGeo={stores.data?.stores.find((x) => x.id === store)?.geo ?? null} />,
           promo: <Promos />,
           staff: <Staff storeId={store} />,
           plan: <Plan storeId={store} />,

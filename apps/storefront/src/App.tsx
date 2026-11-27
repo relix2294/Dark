@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
 import type { AddressListView, AddressView, Brand, CartResponse, CatalogResponse, OrderListView, OrderView, ResolveStoreResponse } from '@dark/contracts';
-import { ApiError, BRAND_RU, Badge, Button, Card, ErrorBanner, Field, ORDER_STATUS_RU, Screen, Spinner, createApi, somoni, statusTone, time } from '@dark/ui';
+import { ApiError, BRAND_RU, Badge, Button, Card, ErrorBanner, Field, MapView, ORDER_STATUS_RU, Screen, Spinner, createApi, somoni, statusTone, time } from '@dark/ui';
 
 type Address = z.infer<typeof AddressView>;
 type Catalog = z.infer<typeof CatalogResponse>;
@@ -111,7 +111,7 @@ function Shop({ onLogout }: { onLogout: () => void }) {
         <History onOpen={setTracking} />
       ) : (
         <>
-          <AddressPicker addresses={addresses.data?.addresses ?? []} value={address} onChange={setAddress} />
+          <AddressPicker brand={brand} addresses={addresses.data?.addresses ?? []} value={address} onChange={setAddress} />
           {address && resolve.error && <ErrorBanner error={resolve.error} />}
           {resolve.data && (
             <div className="muted">
@@ -192,7 +192,7 @@ function Shop({ onLogout }: { onLogout: () => void }) {
   );
 }
 
-function AddressPicker({ addresses, value, onChange }: { addresses: Address[]; value: Address | null; onChange: (a: Address) => void }) {
+function AddressPicker({ brand, addresses, value, onChange }: { brand: Brand; addresses: Address[]; value: Address | null; onChange: (a: Address) => void }) {
   const qc = useQueryClient();
   const [adding, setAdding] = useState(addresses.length === 0);
   const [form, setForm] = useState({ street: '', house: '', flat: '', lat: 38.5598, lon: 68.787 });
@@ -207,6 +207,13 @@ function AddressPicker({ addresses, value, onChange }: { addresses: Address[]; v
   useEffect(() => {
     if (adding && navigator.geolocation) navigator.geolocation.getCurrentPosition((p) => setForm((f) => ({ ...f, lat: p.coords.latitude, lon: p.coords.longitude })), () => undefined, { timeout: 5000 });
   }, [adding]);
+  // проверка зоны для выбранной точки — до сохранения адреса, чтобы клиент сразу видел «вне зоны»
+  const zone = useQuery({
+    queryKey: ['zone-check', brand, form.lat.toFixed(5), form.lon.toFixed(5)],
+    enabled: adding,
+    retry: false,
+    queryFn: () => api.get<Resolve>(`/stores/resolve?lat=${form.lat}&lon=${form.lon}&brand=${brand}`),
+  });
   if (!adding && value)
     return (
       <div className="row">
@@ -231,7 +238,15 @@ function AddressPicker({ addresses, value, onChange }: { addresses: Address[]; v
   return (
     <Card>
       <h2>Адрес доставки</h2>
-      <div className="muted">Точка на карте: {form.lat.toFixed(4)}, {form.lon.toFixed(4)} (определена по геолокации; карта — этап 0)</div>
+      <div className="muted">Нажмите на карту, чтобы уточнить точку доставки.</div>
+      <MapView center={{ lat: form.lat, lon: form.lon }} zoom={16} height={240} onClick={(p) => setForm({ ...form, lat: p.lat, lon: p.lon })} markers={[{ id: 'pin', lat: form.lat, lon: form.lon, color: '#ff5b5b', radius: 10, title: 'сюда' }]} />
+      {zone.data ? (
+        <div className="banner banner-ok">
+          В зоне доставки {BRAND_RU[brand]}: {somoni(zone.data.fee_dirams)}, {zone.data.eta_min}–{zone.data.eta_max} мин
+        </div>
+      ) : zone.error ? (
+        <div className="banner banner-error">Этот адрес вне зоны доставки {BRAND_RU[brand]}</div>
+      ) : null}
       <Field label="Улица">
         <input className="input" value={form.street} onChange={(e) => setForm({ ...form, street: e.target.value })} />
       </Field>
