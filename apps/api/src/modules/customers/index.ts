@@ -7,7 +7,12 @@ import type { AppDeps } from '../../app.js';
 import { address, customer, userStaff } from '../../shared/db/schema/index.js';
 import { requireCustomer } from '../../shared/auth/index.js';
 import { AppError } from '../../shared/errors/index.js';
-import { verifyPin } from '../../shared/auth/index.js';
+import { hashPin, verifyPin } from '../../shared/auth/index.js';
+import { audit } from '../../shared/audit.js';
+import { lockedFor, recordFailure, resetPhone } from './login-guard.js';
+export { purgeAttempts, resetPhone } from './login-guard.js';
+
+const DUMMY_HASH = hashPin('000000');
 export { registerStaffAdmin, isStaffActive } from './admin.js';
 
 /**
@@ -65,11 +70,24 @@ export async function registerCustomers(app: FastifyInstance, deps: AppDeps) {
       config: { idempotency: false },
       schema: { tags: ['auth'], body: StaffLoginRequest, response: { 200: AuthResponse } },
     },
-    async (req) => {
-      const [u] = await deps.db.select().from(userStaff).where(eq(userStaff.phone, req.body.phone));
-      if (!u || !u.isActive || !verifyPin(req.body.pin, u.pinHash)) {
+    async (req, reply) => {
+      const now = deps.clock.now();
+      const { phone, pin } = req.body;
+      const until = await lockedFor(deps.db, phone, req.ip, now);
+      if (until) {
+        reply.header('retry-after', Math.ceil((until.getTime() - now.getTime()) / 1000));
+        throw new AppError('RATE_LIMITED', 'Слишком много неудачных попыток. Попробуйте позже или попросите управляющего сменить PIN', { until: until.toISOString() });
+      }
+      const [u] = await deps.db.select().from(userStaff).where(eq(userStaff.phone, phone));
+      // PIN проверяется и для несуществующего телефона — по времени ответа не узнать, есть ли такой сотрудник
+      const ok = verifyPin(pin, u?.pinHash ?? DUMMY_HASH) && !!u?.isActive;
+      if (!u || !ok) {
+        const { phoneLocked } = await recordFailure(deps.db, phone, req.ip, now);
+        if (phoneLocked)
+          await audit(deps.db, { actorType: 'system', actorId: null, action: 'auth.locked', objectType: 'user_staff', objectId: u?.id ?? phone, after: { ip: req.ip }, reason: 'перебор PIN', storeId: u?.storeId ?? null });
         throw new AppError('UNAUTHORIZED', 'Неверный телефон или PIN');
       }
+      await resetPhone(deps.db, phone);
       const { token, expiresAt } = await deps.tokens.sign({ kind: 'staff', staff_id: u.id, role: u.role, store_id: u.storeId });
       return { token, expires_at: expiresAt.toISOString() };
     },

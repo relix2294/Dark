@@ -4,7 +4,7 @@ import { asc, eq } from 'drizzle-orm';
 import type { StaffRole } from '@dark/contracts';
 import { IdParams, StaffInput, StaffListView, StaffPatch, StaffQuery, StaffView } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
-import { userStaff } from '../../shared/db/schema/index.js';
+import { authAttempt, userStaff } from '../../shared/db/schema/index.js';
 import { audit } from '../../shared/audit.js';
 import { hashPin, requireStaff } from '../../shared/auth/index.js';
 import { AppError, notFound } from '../../shared/errors/index.js';
@@ -78,6 +78,8 @@ export async function registerStaffAdmin(app: FastifyInstance, deps: AppDeps) {
         .returning();
       if (u!.role === 'courier') await ensureCourier(tx, u!.id, 'bike', u!.storeId);
       activeCache.delete(u!.id);
+      // новый PIN снимает блокировку входа по перебору
+      if (pin !== undefined) await tx.delete(authAttempt).where(eq(authAttempt.key, `phone:${u!.phone}`));
       await audit(tx, {
         actorType: 'staff',
         actorId: me.staff_id,

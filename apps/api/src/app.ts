@@ -71,6 +71,9 @@ function createStorage(c: Config): Storage {
 
 export async function buildApp(deps: AppDeps) {
   const app = Fastify({
+    // за Caddy: адрес клиента — тот, что добавил наш единственный прокси; левые адреса X-Forwarded-For
+    // подставляет сам клиент, им верить нельзя (иначе ограничение входа по IP обходится подделкой заголовка)
+    trustProxy: deps.config.NODE_ENV === 'production' ? 1 : false,
     logger: loggerOptions(deps.config.LOG_LEVEL, deps.config.NODE_ENV === 'development'),
     genReqId: (req) => (req.headers['x-request-id'] as string | undefined) ?? randomUUID(),
     requestIdLogLabel: 'request_id',
@@ -80,7 +83,9 @@ export async function buildApp(deps: AppDeps) {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 
-  await app.register(cors, { origin: true });
+  await app.register(cors, {
+    origin: deps.config.NODE_ENV === 'production' ? deps.config.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean) : true,
+  });
   await app.register(sensible);
   await app.register(swagger, {
     openapi: {

@@ -16,6 +16,7 @@ export const ErrorCode = z.enum([
   'TOO_FAR_FROM_ADDRESS',
   'FORBIDDEN',
   // технические
+  'RATE_LIMITED',
   'UNAUTHORIZED',
   'NOT_FOUND',
   'VALIDATION',

@@ -121,3 +121,12 @@ export const address = pgTable('address', {
   flat: text('flat'),
   comment: text('comment'),
 });
+
+/** Неудачные попытки входа: ключ phone:<телефон> или ip:<адрес>. Защита PIN от перебора. */
+export const authAttempt = pgTable('auth_attempt', {
+  key: text('key').primaryKey(),
+  failures: integer('failures').notNull().default(0),
+  windowStart: ts('window_start').notNull().defaultNow(),
+  lockedUntil: ts('locked_until'),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+});

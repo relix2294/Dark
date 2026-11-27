@@ -15,7 +15,7 @@ const ROOT = resolve(import.meta.dirname, '..', 'apps', 'api', 'src');
 /** Какому модулю принадлежат таблицы (запись — только владелец). */
 export const OWNERSHIP = {
   catalog: ['store', 'deliveryZone', 'category', 'product', 'price', 'dish'],
-  customers: ['customer', 'address', 'userStaff'],
+  customers: ['customer', 'address', 'userStaff', 'authAttempt'],
   orders: ['order', 'orderItem', 'orderStatusLog'],
   payments: ['payment', 'paymentOp'],
   promo: ['promo', 'promoUse'],

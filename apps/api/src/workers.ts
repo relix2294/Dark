@@ -10,6 +10,7 @@ import { dispatchStore } from './modules/dispatch/index.js';
 import { CAPTURE_RETRY_DELAYS_SEC, executeCapture, nightlyReconcile, reconcilePending, releaseOrphanHolds, warnExpiringHolds } from './modules/payments/index.js';
 import { markPaymentFailed } from './modules/orders/index.js';
 import { planDailyStocktake } from './modules/wms/index.js';
+import { purgeAttempts } from './modules/customers/index.js';
 
 /**
  * Фоновые задачи на pg-boss (очередь в самом Postgres — без Redis).
@@ -81,6 +82,7 @@ export async function startWorkers(deps: AppDeps, log: FastifyBaseLogger) {
     // утренний план выборочной инвентаризации: дорогие товары во всех ячейках с камерой (ТЗ §7)
     const stores = await deps.db.select({ id: store.id }).from(store).where(eq(store.isActive, true));
     for (const s of stores) await deps.db.transaction((tx) => planDailyStocktake(tx, s.id));
+    await purgeAttempts(deps.db, now);
     await deps.db.delete(courierPosition).where(lt(courierPosition.at, new Date(now.getTime() - 30 * 86_400_000)));
     await deps.db.delete(idempotencyKey).where(and(lt(idempotencyKey.createdAt, new Date(now.getTime() - 7 * 86_400_000)), sql`${idempotencyKey.completedAt} is not null`));
   });
