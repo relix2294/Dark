@@ -17,7 +17,7 @@ import {
 } from '../../shared/db/schema/index.js';
 import { AppError, notFound } from '../../shared/errors/index.js';
 import { publish } from '../../shared/events/outbox.js';
-import { DEFAULT_PARAMS } from '../../shared/params/index.js';
+import { loadParams } from '../../shared/params/load.js';
 import {
   addReplacementItem,
   getItemsWithProducts,
@@ -102,7 +102,7 @@ export async function taskView(tx: Tx, task: typeof pickTask.$inferSelect): Prom
     order_id: task.orderId,
     order_number: o!.number,
     started_at: task.startedAt.toISOString(),
-    sla_ms: DEFAULT_PARAMS.LAB_PICK_SLA_MS,
+    sla_ms: (await loadParams(tx, task.storeId)).LAB_PICK_SLA_MS,
     comment: o!.comment,
     items,
   };
@@ -166,7 +166,7 @@ export async function missing(deps: AppDeps, me: StaffPrincipal, taskId: string,
       const alt = await findReplacement(tx, deps, task.storeId, hit.product, hit.item.priceDirams, hit.item.qtyOrdered);
       if (alt) {
         const ni = await addReplacementItem(tx, hit.item, alt, meta);
-        await reserveForOrder(tx, task.storeId, task.orderId, [{ orderItemId: ni.id, productId: alt.id, qty: ni.qtyOrdered }], deps.clock.now(), DEFAULT_PARAMS.MIN_SHELF_LIFE_PCT);
+        await reserveForOrder(tx, task.storeId, task.orderId, [{ orderItemId: ni.id, productId: alt.id, qty: ni.qtyOrdered }], deps.clock.now(), (await loadParams(tx, task.storeId)).MIN_SHELF_LIFE_PCT);
       } else {
         await markItemMissing(tx, itemId, { ...meta, fallback: 'remove', reason: 'нет аналога' });
       }
@@ -386,7 +386,7 @@ export async function count(deps: AppDeps, me: StaffPrincipal, stocktakeId: stri
       .from(stockLot)
       .where(and(eq(stockLot.cellId, c.id), eq(stockLot.productId, input.product_id)));
     const qtySystem = sys?.q ?? 0;
-    const tolerance = Math.max(1, Math.round((qtySystem * DEFAULT_PARAMS.STOCKTAKE_TOLERANCE_PCT) / 100));
+    const tolerance = Math.max(1, Math.round((qtySystem * (await loadParams(tx, storeId)).STOCKTAKE_TOLERANCE_PCT) / 100));
     const [existing] = await tx.select().from(stocktakeLine).where(and(eq(stocktakeLine.stocktakeId, st.id), eq(stocktakeLine.cellId, c.id), eq(stocktakeLine.productId, input.product_id)));
     // повторный пересчёт другим сотрудником снимает флаг; тем же — нет (ТЗ §7)
     const diffBig = Math.abs(input.qty_fact - qtySystem) > tolerance;

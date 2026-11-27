@@ -5,7 +5,7 @@ import type { Tx } from '../../shared/db/client.js';
 import { kdsItem, order, orderItem, stopList } from '../../shared/db/schema/index.js';
 import { AppError, notFound } from '../../shared/errors/index.js';
 import { publish } from '../../shared/events/outbox.js';
-import { DEFAULT_PARAMS } from '../../shared/params/index.js';
+import { loadParams } from '../../shared/params/load.js';
 import { getDishes } from '../catalog/index.js';
 import { markAllItemsPicked, setPromisedAt, transition } from '../orders/index.js';
 import { consumeIngredients } from '../wms/index.js';
@@ -22,6 +22,7 @@ const storeOf = (me: StaffPrincipal): string => {
 
 /** Загрузка станций: в работе и сколько секунд до освобождения слота (эвристика первого этапа). */
 async function stationLoad(tx: Tx, storeId: string, now: Date): Promise<StationLoad> {
+  const params = await loadParams(tx, storeId);
   const rows = await tx
     .select()
     .from(kdsItem)
@@ -30,13 +31,24 @@ async function stationLoad(tx: Tx, storeId: string, now: Date): Promise<StationL
   for (const s of STATIONS) {
     const mine = rows.filter((r) => r.station === s);
     const inProgress = mine.filter((r) => r.startedAt !== null);
-    const capacity = DEFAULT_PARAMS.STATION_CAPACITY[s] ?? 4;
+    const capacity = params.STATION_CAPACITY[s] ?? 4;
     // когда освободится первый слот: минимальное оставшееся время среди блюд в работе
     const remaining = inProgress.map((r) => Math.max(0, Math.round((r.startedAt!.getTime() + r.cookTimeSec * 1000 - now.getTime()) / 1000)));
     const queuedSec = inProgress.length >= capacity ? Math.min(...remaining) : 0;
     load[s] = { inProgress: inProgress.length, capacity, queuedSec: Number.isFinite(queuedSec) ? queuedSec : 0 };
   }
   return load;
+}
+
+/** Оценка готовности заказа по текущей загрузке станций — для обещания до оформления (без записи). */
+export async function estimateReady(tx: Tx, storeId: string, items: { productId: string; qty: number }[], now: Date): Promise<Date> {
+  const dishes = await getDishes(tx, items.map((i) => i.productId));
+  const toCook = items.flatMap((i, idx) => {
+    const d = dishes.get(i.productId);
+    return d ? [{ orderItemId: String(idx), station: d.station, cookTimeSec: d.cookTimeSec * Math.max(1, Math.ceil(i.qty / 2)) }] : [];
+  });
+  if (toCook.length === 0) return now;
+  return scheduleOrder(now, toCook, await stationLoad(tx, storeId, now)).targetReadyAt;
 }
 
 /**
@@ -65,7 +77,7 @@ export async function enqueueOrder(tx: Tx, deps: AppDeps, o: { id: string; store
       targetReadyAt: d.targetReadyAt,
     })),
   );
-  const promisedAt = sorPromise(plan.targetReadyAt, DEFAULT_PARAMS.SOR_PREASSIGN_MS, travelMs);
+  const promisedAt = sorPromise(plan.targetReadyAt, (await loadParams(tx, o.storeId)).SOR_PREASSIGN_MS, travelMs);
   await setPromisedAt(tx, o.id, promisedAt);
   return { targetReadyAt: plan.targetReadyAt, promisedAt };
 }

@@ -7,7 +7,7 @@ import type { Tx } from '../../shared/db/client.js';
 import { courier, courierPlan } from '../../shared/db/schema/index.js';
 import { audit } from '../../shared/audit.js';
 import { requireStaff } from '../../shared/auth/index.js';
-import { DEFAULT_PARAMS } from '../../shared/params/index.js';
+import { loadParams } from '../../shared/params/load.js';
 
 /** Курьер — расширение сотрудника с ролью courier. Создаётся при заведении/смене роли. */
 export async function ensureCourier(tx: Tx, staffId: string, transport: 'foot' | 'bike' | 'moto', storeId: string | null) {
@@ -29,11 +29,12 @@ export async function forecast(tx: Tx, storeId: string, date: string) {
       and (o.created_at at time zone 'Asia/Dushanbe')::date in (select d from days)
       and o.status not in ('payment_failed')
     group by 1, 2`);
-  const perHour = DEFAULT_PARAMS.COURIER_ORDERS_PER_HOUR;
+  const P = await loadParams(tx, storeId);
+  const perHour = P.COURIER_ORDERS_PER_HOUR;
   const out = Array.from({ length: 24 }, (_, hour) => {
     const lab = Math.round(rows.rows.find((r) => r.hour === hour && r.brand === 'LAB')?.n ?? 0);
     const sor = Math.round(rows.rows.find((r) => r.hour === hour && r.brand === 'SOR')?.n ?? 0);
-    const need = lab + sor === 0 ? 0 : Math.max(DEFAULT_PARAMS.LAB_RESERVE, Math.ceil((lab + sor) / perHour));
+    const need = lab + sor === 0 ? 0 : Math.max(P.LAB_RESERVE, Math.ceil((lab + sor) / perHour));
     return { hour, forecast_orders_lab: lab, forecast_orders_sor: sor, couriers_needed: need };
   });
   return out;

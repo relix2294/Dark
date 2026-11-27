@@ -40,3 +40,5 @@ export const StaffCancelRequest = z.object({ reason: z.string().min(1).max(200) 
 export const ReturnedRequest = z.object({ comment: z.string().max(200).optional() });
 export const RefundRequest = z.object({ amount_dirams: Dirams.min(1), reason: z.string().min(1).max(200) });
 export const RefundView = z.object({ payment_status: z.string(), refunded_dirams: Dirams, captured_dirams: Dirams });
+
+export const LeadDeliveredRequest = z.object({ reason: z.string().min(1).max(200) });

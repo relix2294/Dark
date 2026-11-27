@@ -38,9 +38,15 @@ export type ParamKey = keyof Params;
 export function resolveParams(overrides: Partial<Record<ParamKey, unknown>>): Params {
   const out = { ...DEFAULT_PARAMS } as Params;
   for (const [k, v] of Object.entries(overrides)) {
-    if (k in DEFAULT_PARAMS && v !== undefined && typeof v === typeof DEFAULT_PARAMS[k as ParamKey]) {
-      (out as Record<string, unknown>)[k] = v;
-    }
+    if (!(k in DEFAULT_PARAMS) || v === undefined || v === null) continue;
+    const def = DEFAULT_PARAMS[k as ParamKey];
+    if (typeof v !== typeof def) continue;
+    // объектные параметры (STATION_CAPACITY, LAST_ORDER_BEFORE_CLOSE_MS) — слияние по ключам, только числа
+    if (typeof def === 'object') {
+      const merged: Record<string, number> = { ...(def as Record<string, number>) };
+      for (const [kk, vv] of Object.entries(v as Record<string, unknown>)) if (typeof vv === 'number') merged[kk] = vv;
+      (out as Record<string, unknown>)[k] = merged;
+    } else (out as Record<string, unknown>)[k] = v;
   }
   return out;
 }

@@ -16,7 +16,7 @@ export function priceCart(
   deliveryFee: Dirams,
   discount: Dirams,
   promo: { applied: string | null; error: string | null },
-): CartResponse {
+): Omit<CartResponse, 'eta_minutes' | 'eta_warning' | 'accepts_orders'> {
   const out: CartResponse['lines'] = [];
   const unavailable: string[] = [];
   for (const l of lines) {

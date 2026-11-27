@@ -1,12 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   ConsoleCouriersView,
   ConsoleOrderParams,
   ConsoleOrdersView,
   ConsoleStoreParams,
+  LeadDeliveredRequest,
   DeliveryTaskView,
   ManualAssignRequest,
   RefundRequest,
@@ -16,27 +17,21 @@ import {
 } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
 import { cancelByStaff, consoleOrders } from '../orders/index.js';
-import { consoleCouriers, manualAssign, markReturned } from '../dispatch/index.js';
+import { confirmDeliveredByLead, consoleCouriers, manualAssign, markReturned } from '../dispatch/index.js';
 import { refund } from '../payments/index.js';
 export { registerReports } from './reports.js';
 import { auditLog, parameter } from '../../shared/db/schema/index.js';
 import { audit as auditDb, type AuditEntry } from '../../shared/audit.js';
 import { requireStaff, requireStaffAny } from '../../shared/auth/index.js';
-import { DEFAULT_PARAMS, resolveParams, type ParamKey } from '../../shared/params/index.js';
+import { DEFAULT_PARAMS, type ParamKey } from '../../shared/params/index.js';
+import { invalidateParams, loadParams } from '../../shared/params/load.js';
+import { AppError } from '../../shared/errors/index.js';
 
 /**
  * Модуль backoffice: параметры по точке (ТЗ §12), журнал действий (ТЗ §10). Каталог, цены, промо,
  * персонал, отчёты — следующие итерации, в этом же модуле.
  */
-export async function getParams(deps: AppDeps, storeId: string | null) {
-  const rows = await deps.db
-    .select()
-    .from(parameter)
-    .where(storeId ? eq(parameter.storeId, storeId) : isNull(parameter.storeId));
-  const overrides: Partial<Record<ParamKey, unknown>> = {};
-  for (const r of rows) overrides[r.key as ParamKey] = r.value;
-  return resolveParams(overrides);
-}
+export const getParams = (deps: AppDeps, storeId: string | null) => loadParams(deps.db, storeId);
 
 
 const audit = (deps: AppDeps, e: AuditEntry) => auditDb(deps.db, e);
@@ -76,9 +71,16 @@ export async function registerBackoffice(app: FastifyInstance, deps: AppDeps) {
     await audit(deps, { actorType: 'staff', actorId: me.staff_id, action: 'order.returned', objectType: 'order', objectId: req.params.id, after: res, storeId: req.params.store_id });
     return res;
   });
+  /** Курьер далеко от адреса (TOO_FAR_FROM_ADDRESS): подтверждает старший смены с причиной (ТЗ §11). */
+  r.post('/console/stores/:store_id/orders/:id/delivered', { schema: { tags, security: sec, params: ConsoleOrderParams, body: LeadDeliveredRequest } }, async (req) => {
+    const me = requireStaff(req.principal, 'shift_lead.console', req.params.store_id);
+    const res = await confirmDeliveredByLead(deps, me, req.params.id, req.body.reason);
+    await audit(deps, { actorType: 'staff', actorId: me.staff_id, action: 'order.delivered_override', objectType: 'order', objectId: req.params.id, after: res, reason: req.body.reason, storeId: req.params.store_id });
+    return res;
+  });
   r.post('/console/stores/:store_id/orders/:id/refund', { schema: { tags, security: sec, params: ConsoleOrderParams, body: RefundRequest, response: { 200: RefundView } } }, async (req) => {
     // до лимита — старший смены, управляющий, финансист; выше — только управляющий и финансист (ТЗ §9)
-    const perms = req.body.amount_dirams > DEFAULT_PARAMS.REFUND_LIMIT_DIRAMS ? (['payments.refund.over_limit'] as const) : (['payments.refund.under_limit'] as const);
+    const perms = req.body.amount_dirams > (await loadParams(deps.db, req.params.store_id)).REFUND_LIMIT_DIRAMS ? (['payments.refund.over_limit'] as const) : (['payments.refund.under_limit'] as const);
     const me = requireStaffAny(req.principal, [...perms], req.params.store_id);
     const res = await refund(deps, req.params.id, req.body.amount_dirams, me.staff_id, req.body.reason);
     await audit(deps, { actorType: 'staff', actorId: me.staff_id, action: 'payment.refund', objectType: 'order', objectId: req.params.id, after: res, reason: req.body.reason, storeId: req.params.store_id });
@@ -96,13 +98,14 @@ export async function registerBackoffice(app: FastifyInstance, deps: AppDeps) {
     async (req) => {
       const me = requireStaff(req.principal, 'params.write', req.params.store_id);
       const before = await getParams(deps, req.params.store_id);
-      if (typeof req.body.value !== typeof DEFAULT_PARAMS[req.body.key]) {
-        return { error: { code: 'VALIDATION', message: `Тип значения ${req.body.key} должен быть ${typeof DEFAULT_PARAMS[req.body.key]}` } };
+      if (typeof req.body.value !== typeof DEFAULT_PARAMS[req.body.key] || req.body.value === null) {
+        throw new AppError('VALIDATION', `Тип значения ${req.body.key} должен быть ${typeof DEFAULT_PARAMS[req.body.key]}`);
       }
       await deps.db
         .insert(parameter)
         .values({ storeId: req.params.store_id, key: req.body.key, value: req.body.value, editedBy: me.staff_id })
         .onConflictDoUpdate({ target: [parameter.storeId, parameter.key], set: { value: req.body.value, editedBy: me.staff_id, updatedAt: deps.clock.now() } });
+      invalidateParams(req.params.store_id);
       await audit(deps, {
         actorType: 'staff',
         actorId: me.staff_id,

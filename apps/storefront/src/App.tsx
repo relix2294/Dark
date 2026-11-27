@@ -198,10 +198,15 @@ function Shop({ onLogout }: { onLogout: () => void }) {
                     <span>Итого</span>
                     <span>{somoni(cart.data.total_dirams)}</span>
                   </div>
+                  <div className="muted">Доставим примерно через {cart.data.eta_minutes} мин</div>
+                  {cart.data.eta_warning && (
+                    <div className="banner banner-error">Кухня сейчас загружена: ожидание около {cart.data.eta_minutes} минут. Оформить всё равно?</div>
+                  )}
+                  {!cart.data.accepts_orders && <div className="banner banner-error">Точка скоро закрывается — заказы больше не принимаются</div>}
                 </>
               )}
               <ErrorBanner error={place.error instanceof ApiError && place.error.code === 'PRICE_CHANGED' ? new ApiError(409, 'PRICE_CHANGED', 'Сумма изменилась, проверьте корзину и подтвердите заново') : place.error} />
-              <Button big primary disabled={!cart.data || cart.data.unavailable_product_ids.length > 0 || place.isPending || !resolve.data?.is_open} onClick={() => place.mutate()}>
+              <Button big primary disabled={!cart.data || cart.data.unavailable_product_ids.length > 0 || place.isPending || !cart.data.accepts_orders} onClick={() => place.mutate()}>
                 Оплатить {cart.data ? somoni(cart.data.total_dirams) : ''}
               </Button>
             </Card>

@@ -40,6 +40,12 @@ export const CartResponse = z.object({
   total_dirams: Dirams,
   promo_applied: z.string().nullable(),
   promo_error: z.string().nullable(),
+  /** Обещание до оформления, минут (ТЗ §8). */
+  eta_minutes: z.number().int(),
+  /** SOR: обещание больше SOR_MAX_PROMISE — витрина предупреждает до оплаты. */
+  eta_warning: z.boolean(),
+  /** Точка принимает заказы (открыта и не в последние LAST_ORDER_BEFORE_CLOSE минут). */
+  accepts_orders: z.boolean(),
 });
 export type CartResponse = z.infer<typeof CartResponse>;
 

@@ -146,6 +146,11 @@ function OrderActions({ storeId, order, couriers, onClose }: { storeId: string; 
           Отменить заказ
         </Button>
       )}
+      {order.status === 'on_the_way' && (
+        <Button disabled={!reason || act.isPending} onClick={() => act.mutate({ path: 'delivered', body: { reason } })}>
+          Подтвердить доставку (курьер вне геозоны)
+        </Button>
+      )}
       {order.status === 'returning' && (
         <Button primary disabled={act.isPending} onClick={() => act.mutate({ path: 'returned', body: { comment: reason } })}>
           Пакет принят на точке

@@ -2,15 +2,15 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { Brand, CartResponse, CreateOrderRequest, CustomerPrincipal, OrderStatus, OrderView } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
 import type { Tx } from '../../shared/db/client.js';
-import { address, customer, order, orderItem, orderStatusLog } from '../../shared/db/schema/index.js';
+import { address, order, orderItem, orderStatusLog } from '../../shared/db/schema/index.js';
 import { AppError, notFound } from '../../shared/errors/index.js';
 import { publish } from '../../shared/events/outbox.js';
 import { holdAmount } from '../../shared/money.js';
-import { DEFAULT_PARAMS } from '../../shared/params/index.js';
+import { loadParams } from '../../shared/params/load.js';
 import { getStore, isOpenAt, priceProducts, resolveZone } from '../catalog/index.js';
 import { applyPromo, countUses, findPromo, recordUse } from '../promo/index.js';
 import { reserveForOrder, unreserve } from '../wms/index.js';
-import { enqueueOrder } from '../kds/index.js';
+import { enqueueOrder, estimateReady } from '../kds/index.js';
 import { applyHoldResult, captureAmountNow, openHold, releaseHold } from '../payments/index.js';
 import { courierForOrder, detachOrder } from '../dispatch/index.js';
 import type { StaffPrincipal } from '@dark/contracts';
@@ -33,8 +33,9 @@ export async function quoteCart(deps: AppDeps, me: CustomerPrincipal, input: Car
 async function quoteInTx(tx: Tx, deps: AppDeps, me: CustomerPrincipal, input: CartCtx) {
   const store = await getStore(deps, input.store_id);
   let fee = 0;
+  let addr: typeof address.$inferSelect | undefined;
   if (input.address_id) {
-    const [addr] = await tx.select().from(address).where(and(eq(address.id, input.address_id), eq(address.customerId, me.customer_id)));
+    [addr] = await tx.select().from(address).where(and(eq(address.id, input.address_id), eq(address.customerId, me.customer_id)));
     if (!addr) throw notFound('Адрес', input.address_id);
     const { zone, store: zoneStore } = await resolveZone(deps, input.brand, addr);
     if (zoneStore.id !== store.id) throw new AppError('OUT_OF_ZONE', 'Адрес обслуживает другая точка', { store_id: zoneStore.id });
@@ -50,16 +51,15 @@ async function quoteInTx(tx: Tx, deps: AppDeps, me: CustomerPrincipal, input: Ca
     promoRule = await findPromo(tx, input.promo_code);
     if (!promoRule) promoState = { applied: null, error: 'Промокод не найден' };
     else {
-      const [c] = await tx.select().from(customer).where(eq(customer.id, me.customer_id));
       const uses = await countUses(tx, promoRule.id, me.customer_id);
       const res = applyPromo(promoRule, {
         brand: input.brand,
         itemsTotal: draft.items_total_dirams,
         deliveryFee: fee,
         now: deps.clock.now(),
-        customerIsNew: (c?.ordersCount ?? 0) === 0,
+        customerIsNew: await isNewCustomer(tx, me.customer_id),
         customerUses: uses,
-        addressNewcomerUses: 0, // TODO(promo): подсчёт новичков по адресу (ТЗ §11)
+        addressNewcomerUses: addr ? await newcomersAtAddress(tx, addr, me.customer_id) : 0,
       });
       if ('error' in res) promoState = { applied: null, error: res.error };
       else {
@@ -68,18 +68,68 @@ async function quoteInTx(tx: Tx, deps: AppDeps, me: CustomerPrincipal, input: Ca
       }
     }
   }
-  const cart = priceCart(input.items, products, fee, discount, promoState);
-  return { cart, products, store, promoRule: promoState.applied ? promoRule : null, discount };
+  const priced = priceCart(input.items, products, fee, discount, promoState);
+  // обещание до оформления (ТЗ §8): LAB — норматив; SOR — раскладка по текущей загрузке кухни + ожидание курьера + путь
+  const params = await loadParams(tx, store.id);
+  const now = deps.clock.now();
+  let etaMs: number = params.LAB_PROMISE_MS;
+  if (input.brand === 'SOR') {
+    const travelMs = addr ? travelMinutes(store, addr, 'bike') * 60_000 : 15 * 60_000;
+    const ready = await estimateReady(tx, store.id, input.items.map((i) => ({ productId: i.product_id, qty: i.qty })), now);
+    etaMs = Math.max(params.SOR_PROMISE_MS, ready.getTime() - now.getTime() + params.SOR_PREASSIGN_MS + travelMs);
+  }
+  const cart = {
+    ...priced,
+    eta_minutes: Math.ceil(etaMs / 60_000),
+    eta_warning: input.brand === 'SOR' && etaMs > params.SOR_MAX_PROMISE_MS,
+    accepts_orders: acceptsOrders(store.workHours, now, deps.config.DISPLAY_TZ, params.LAST_ORDER_BEFORE_CLOSE_MS[input.brand] ?? 0),
+  };
+  return { cart, products, store, promoRule: promoState.applied ? promoRule : null, discount, etaMs };
+}
+
+/** Новичок — нет заказов, кроме отменённых и неоплаченных (счётчик orders_count растёт только при доставке). */
+async function isNewCustomer(tx: Tx, customerId: string) {
+  const [r] = await tx
+    .select({ n: sql<number>`count(*)::int` })
+    .from(order)
+    .where(and(eq(order.customerId, customerId), sql`${order.status} not in ('cancelled', 'payment_failed')`));
+  return (r?.n ?? 0) === 0;
+}
+
+/**
+ * Сколько других клиентов уже получали промо для новичков на этот адрес (ТЗ §11: не больше 2).
+ * Адрес совпадает по улице + дому + квартире без учёта регистра и пробелов или по точке ближе ~30 м.
+ */
+async function newcomersAtAddress(tx: Tx, a: typeof address.$inferSelect, customerId: string) {
+  const norm = (s: string | null | undefined) => (s ?? '').toLowerCase().replace(/\s+/g, '');
+  const d = 0.0003; // ~30 м по широте
+  const rows = await tx.execute<{ n: number }>(sql`
+    select count(distinct u.customer_id)::int n
+    from promo_use u join promo p on p.id = u.promo_id join "order" o on o.id = u.order_id
+    where p.audience = 'new' and u.customer_id <> ${customerId}
+      and (
+        (lower(regexp_replace(coalesce(o.address_snapshot->>'street', ''), '[[:space:]]', '', 'g')) = ${norm(a.street)}
+          and lower(regexp_replace(coalesce(o.address_snapshot->>'house', ''), '[[:space:]]', '', 'g')) = ${norm(a.house)}
+          and lower(regexp_replace(coalesce(o.address_snapshot->>'flat', ''), '[[:space:]]', '', 'g')) = ${norm(a.flat)})
+        or (abs((o.address_snapshot->>'lat')::float - ${a.lat}) < ${d} and abs((o.address_snapshot->>'lon')::float - ${a.lon}) < ${d})
+      )`);
+  return rows.rows[0]?.n ?? 0;
+}
+
+/** Приём заказов: точка открыта сейчас и будет открыта ещё lead мс (ТЗ §11 LAST_ORDER_BEFORE_CLOSE). */
+function acceptsOrders(hours: Parameters<typeof isOpenAt>[0], now: Date, tz: string, leadMs: number) {
+  return isOpenAt(hours, now, tz) && isOpenAt(hours, new Date(now.getTime() + leadMs), tz);
 }
 
 export async function createOrder(deps: AppDeps, me: CustomerPrincipal, input: CreateOrderRequest): Promise<OrderView> {
-  const params = DEFAULT_PARAMS; // TODO(params): resolveParams по точке
+  const params = await loadParams(deps.db, input.store_id);
   const now = deps.clock.now();
 
   // Шаг 1: в одной транзакции — проверка корзины, order(created), payment(hold_pending), payment_op
   const created = await deps.db.transaction(async (tx) => {
     const q = await quoteInTx(tx, deps, me, input);
     if (!isOpenAt(q.store.workHours, now, deps.config.DISPLAY_TZ)) throw new AppError('STORE_CLOSED', 'Точка закрыта');
+    if (!q.cart.accepts_orders) throw new AppError('STORE_CLOSED', 'Точка скоро закрывается — заказы больше не принимаются', { reason: 'last_order_before_close' });
     if (q.cart.unavailable_product_ids.length) {
       throw new AppError('OUT_OF_STOCK', 'Часть товаров недоступна', { product_ids: q.cart.unavailable_product_ids });
     }
@@ -93,7 +143,7 @@ export async function createOrder(deps: AppDeps, me: CustomerPrincipal, input: C
     }
 
     const number = await nextOrderNumber(tx, input.brand);
-    const promise = input.brand === 'LAB' ? params.LAB_PROMISE_MS : params.SOR_PROMISE_MS;
+    const promise = q.etaMs;
     const [o] = await tx
       .insert(order)
       .values({
@@ -277,7 +327,7 @@ export async function cancelByStaff(deps: AppDeps, me: StaffPrincipal, orderId: 
     const items = await tx.select({ id: orderItem.id }).from(orderItem).where(eq(orderItem.orderId, o.id));
     await unreserve(tx, items.map((i) => i.id));
     let fee = 0;
-    if (o.brand === 'SOR' && ['cooking', 'ready'].includes(o.status)) fee = percentOf(o.itemsTotalDirams, DEFAULT_PARAMS.SOR_CANCEL_FEE_PCT);
+    if (o.brand === 'SOR' && ['cooking', 'ready'].includes(o.status)) fee = percentOf(o.itemsTotalDirams, (await loadParams(tx, o.storeId)).SOR_CANCEL_FEE_PCT);
     await tx.update(order).set({ cancelReason: reason, capturedDirams: fee }).where(eq(order.id, o.id));
     await detachOrder(tx, o.id, `заказ отменён: ${reason}`);
     await transition(tx, o.id, o.status, 'cancelled', 'staff', me.staff_id, { reason, fee_dirams: fee });

@@ -6,8 +6,9 @@ import { courier, courierPosition, courierShift, deliveryTask, kdsItem, order, o
 import { AppError, notFound } from '../../shared/errors/index.js';
 import { publish } from '../../shared/events/outbox.js';
 import { distanceM, travelMinutes, type Geo } from '../../shared/geo.js';
-import { DEFAULT_PARAMS } from '../../shared/params/index.js';
-import { ACTIVE_STATUSES, setCaptured, transition } from '../orders/index.js';
+import { loadParams } from '../../shared/params/load.js';
+import { setCaptured, transition } from '../orders/index.js';
+import { markCustomerDelivered } from '../customers/index.js';
 import { captureAmountNow } from '../payments/index.js';
 import { returnPickedItems } from '../wms/index.js';
 import { planDispatch, type FreeCourier, type PendingOrder } from './planner.js';
@@ -16,7 +17,6 @@ import { courierMachine, taskMachine } from './state-machine.js';
 /** Диспетчер и приложение курьера (ТЗ §6, §4). */
 
 const TASK_ACTIVE = ['offered', 'accepted', 'at_store', 'picked_up', 'delivering'] as const;
-const P = DEFAULT_PARAMS;
 
 export async function courierOf(tx: Tx, me: StaffPrincipal) {
   const [c] = await tx.select().from(courier).where(eq(courier.staffId, me.staff_id)).for('update');
@@ -116,6 +116,7 @@ export async function positions(deps: AppDeps, me: StaffPrincipal, points: { lat
 // ---------- задания курьера ----------
 
 async function taskView(tx: Tx, t: typeof deliveryTask.$inferSelect): Promise<DeliveryTaskView> {
+  const P = await loadParams(tx, t.storeId);
   const [st] = await tx.select().from(store).where(eq(store.id, t.storeId));
   const orders = t.orderIds.length ? await tx.select().from(order).where(inArray(order.id, t.orderIds)) : [];
   const items = orders.length
@@ -206,7 +207,7 @@ export async function pickup(deps: AppDeps, me: StaffPrincipal, taskId: string, 
   });
 }
 
-/** Подтверждение у двери: геозона (ТЗ §11), delivered, списание фактической суммы. */
+/** Подтверждение у двери курьером: только внутри геозоны адреса (ТЗ §11). */
 export async function delivered(deps: AppDeps, me: StaffPrincipal, orderId: string, geo: Geo, photoUrl?: string) {
   const result = await deps.db.transaction(async (tx) => {
     const c = await courierOf(tx, me);
@@ -214,25 +215,51 @@ export async function delivered(deps: AppDeps, me: StaffPrincipal, orderId: stri
     if (!t) throw notFound('Задание с этим заказом', orderId);
     const [o] = await tx.select().from(order).where(eq(order.id, orderId)).for('update');
     if (!o) throw notFound('Заказ', orderId);
-    const a = o.addressSnapshot as { lat: number; lon: number };
-    const dist = distanceM(geo, a);
-    const override = ['shift_lead', 'manager'].includes(me.role);
-    if (dist > P.DELIVERY_GEOFENCE_M && !override) {
+    const P = await loadParams(tx, o.storeId);
+    const dist = distanceM(geo, o.addressSnapshot as { lat: number; lon: number });
+    if (dist > P.DELIVERY_GEOFENCE_M) {
       throw new AppError('TOO_FAR_FROM_ADDRESS', 'Слишком далеко от адреса — подтвердить может старший смены', { distance_m: Math.round(dist), geofence_m: P.DELIVERY_GEOFENCE_M });
     }
-    await transition(tx, o.id, o.status, 'delivered', 'staff', me.staff_id, { distance_m: Math.round(dist), photo_url: photoUrl ?? null, override });
-    await setCaptured(tx, o.id, o.totalDirams);
-    const rest = await tx.select().from(order).where(and(inArray(order.id, t.orderIds), inArray(order.status, [...ACTIVE_STATUSES])));
-    const taskDone = rest.filter((x) => x.status === 'on_the_way').length === 0;
-    if (taskDone) {
-      await setTaskStatus(tx, t, 'done', 'courier', { finishedAt: deps.clock.now() });
-      await setCourierStatus(tx, c, 'returning', 'system');
-    }
-    return { orderId: o.id, amount: o.totalDirams, task: t };
+    return finishDelivery(tx, deps, t, c, o, me.staff_id, { distance_m: Math.round(dist), photo_url: photoUrl ?? null });
   });
   // списание — вне транзакции заказа; при неуспехе повтор по расписанию (воркер payments.capture)
   const cap = await captureAmountNow(deps, result.orderId, result.amount);
   return { order_id: result.orderId, captured: cap?.ok ?? false, task_status: result.task.status };
+}
+
+/** Доставлено вне геозоны: подтверждает только старший смены с причиной (ТЗ §11); пишется в журнал вызывающим. */
+export async function confirmDeliveredByLead(deps: AppDeps, me: StaffPrincipal, orderId: string, reason: string) {
+  const result = await deps.db.transaction(async (tx) => {
+    const [o] = await tx.select().from(order).where(eq(order.id, orderId)).for('update');
+    if (!o) throw notFound('Заказ', orderId);
+    if (me.store_id && me.store_id !== o.storeId) throw new AppError('FORBIDDEN', 'Чужая точка');
+    const [t] = await tx.select().from(deliveryTask).where(and(eq(deliveryTask.status, 'delivering'), sql`${orderId} = any(${deliveryTask.orderIds})`)).for('update');
+    if (!t) throw new AppError('INVALID_TRANSITION', 'Заказ не в пути');
+    const [c] = await tx.select().from(courier).where(eq(courier.id, t.courierId)).for('update');
+    return finishDelivery(tx, deps, t, c!, o, me.staff_id, { override: true, reason, confirmed_by: me.staff_id });
+  });
+  const cap = await captureAmountNow(deps, result.orderId, result.amount);
+  return { order_id: result.orderId, captured: cap?.ok ?? false, task_status: result.task.status };
+}
+
+async function finishDelivery(
+  tx: Tx,
+  deps: AppDeps,
+  t: typeof deliveryTask.$inferSelect,
+  c: typeof courier.$inferSelect,
+  o: typeof order.$inferSelect,
+  actorId: string,
+  meta: Record<string, unknown>,
+) {
+  await transition(tx, o.id, o.status, 'delivered', 'staff', actorId, meta);
+  await setCaptured(tx, o.id, o.totalDirams);
+  await markCustomerDelivered(tx, o.customerId, deps.clock.now());
+  const rest = await tx.select().from(order).where(and(inArray(order.id, t.orderIds), eq(order.status, 'on_the_way')));
+  if (rest.length === 0) {
+    await setTaskStatus(tx, t, 'done', 'system', { finishedAt: deps.clock.now() });
+    await setCourierStatus(tx, c, 'returning', 'system');
+  }
+  return { orderId: o.id, amount: o.totalDirams, task: t };
 }
 
 /** Клиент не вышел: 2 звонка и ожидание → returning (ТЗ §11). */
@@ -276,6 +303,7 @@ export async function markReturned(deps: AppDeps, me: StaffPrincipal, orderId: s
 export async function dispatchStore(deps: AppDeps, storeId: string): Promise<{ assigned: number; alerts: number }> {
   const now = deps.clock.now();
   return deps.db.transaction(async (tx) => {
+    const P = await loadParams(tx, storeId);
     const [st] = await tx.select().from(store).where(eq(store.id, storeId));
     if (!st) return { assigned: 0, alerts: 0 };
 

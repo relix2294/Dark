@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
+import type { Tx } from '../../shared/db/client.js';
 import { AddressCreate, AddressListView, AddressView, AuthResponse, DcAuthRequest, StaffLoginRequest } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
 import { address, customer, userStaff } from '../../shared/db/schema/index.js';
@@ -13,6 +14,14 @@ export { registerStaffAdmin, isStaffActive } from './admin.js';
  * Модуль customers: вход клиента (обмен токена DC Next) и вход персонала (телефон + PIN).
  * Публичный интерфейс для других модулей — только функции ниже, не таблицы.
  */
+/** Заказ доставлен: счётчик заказов клиента и дата первого заказа (для отчётов и сегментов). */
+export async function markCustomerDelivered(tx: Tx, customerId: string, at: Date) {
+  await tx
+    .update(customer)
+    .set({ ordersCount: sql`${customer.ordersCount} + 1`, firstOrderAt: sql`coalesce(${customer.firstOrderAt}, ${at})` })
+    .where(eq(customer.id, customerId));
+}
+
 export async function findCustomerById(deps: AppDeps, id: string) {
   const [c] = await deps.db.select().from(customer).where(eq(customer.id, id));
   return c ?? null;
