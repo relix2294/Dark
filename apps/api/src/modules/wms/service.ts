@@ -5,6 +5,7 @@ import type { AppDeps } from '../../app.js';
 import type { Tx } from '../../shared/db/client.js';
 import {
   cell,
+  kdsItem,
   order,
   pickTask,
   price,
@@ -75,6 +76,8 @@ export async function taskView(tx: Tx, task: typeof pickTask.$inferSelect): Prom
   const [o] = await tx.select().from(order).where(eq(order.id, task.orderId));
   const rows = await getItemsWithProducts(tx, task.orderId);
   const reserved = await reservedByLot(tx, rows.map((r) => r.item.id));
+  // блюда кухни в заказе (этап 2 ТЗ §8): состояние на станции читаем из очереди кухни
+  const kitchen = rows.length ? await tx.select().from(kdsItem).where(inArray(kdsItem.orderItemId, rows.map((r) => r.item.id))) : [];
   const items = rows
     .filter((r) => r.item.status !== 'replaced')
     .map(({ item, product: p }) => {
@@ -85,7 +88,9 @@ export async function taskView(tx: Tx, task: typeof pickTask.$inferSelect): Prom
       const mm = (item.missingMeta ?? {}) as Record<string, unknown>;
       const callDeadline =
         item.status === 'missing' && mm['call_required'] && !mm['call_resolved'] && typeof mm['at'] === 'string' ? new Date(new Date(mm['at']).getTime() + 60_000).toISOString() : null;
+      const k = kitchen.find((x) => x.orderItemId === item.id);
       return {
+        kitchen: k ? { ready: k.doneAt !== null, station: k.station } : null,
         call_deadline: callDeadline,
         order_item_id: item.id,
         product_id: item.productId,

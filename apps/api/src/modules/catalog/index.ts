@@ -17,6 +17,7 @@ export { registerCatalogImport } from './import.js';
 /** Публичный интерфейс модуля catalog для orders/cart. */
 export type PricedProduct = {
   id: string;
+  brand: 'LAB' | 'SOR';
   nameRu: string;
   isWeighted: boolean;
   isActive: boolean;
@@ -93,7 +94,7 @@ export async function priceProducts(deps: AppDeps, storeId: string, productIds: 
     rows.map((r) => [
       r.id,
       r.brand === 'SOR'
-        ? { ...r, available: stopped.has(r.id) ? 0 : Number.MAX_SAFE_INTEGER, modifiersRaw: dishes.get(r.id)?.modifiers ?? null }
+        ? { ...r, available: stopped.has(r.id) ? 0 : Number.MAX_SAFE_INTEGER, modifiersRaw: dishes.has(r.id) ? (dishes.get(r.id)!.modifiers ?? {}) : null }
         : { ...r, modifiersRaw: null },
     ]),
   );
@@ -122,6 +123,9 @@ export async function registerCatalog(app: FastifyInstance, deps: AppDeps) {
   r.get('/catalog', { schema: { tags: ['storefront'], querystring: CatalogQuery, response: { 200: CatalogResponse } } }, async (req) => {
     const { store_id, brand, category, q } = req.query;
     const now = deps.clock.now();
+    const [st] = await deps.db.select({ brands: store.brands }).from(store).where(eq(store.id, store_id));
+    // каталог Lablabu на точке с кухней показывает и блюда Sor Box (ТЗ §8, этап 2)
+    const withKitchen = brand === 'LAB' && !!st?.brands.includes('SOR');
     const rows = await deps.db
       .select({
         product,
@@ -137,15 +141,16 @@ export async function registerCatalog(app: FastifyInstance, deps: AppDeps) {
       )
       .where(
         and(
-          eq(product.brand, brand),
+          withKitchen ? sql`(${product.brand} = 'LAB' or exists (select 1 from ${dish} where ${dish.productId} = ${product.id}))` : eq(product.brand, brand),
           eq(product.isActive, true),
           category ? eq(product.categoryId, category) : undefined,
           q ? sql`${product.nameRu} ilike ${'%' + q + '%'}` : undefined,
         ),
       )
       .limit(500);
-    const stopped = brand === 'SOR' ? await stoppedProductIds(deps, store_id, rows.map((r) => r.product.id)) : new Set<string>();
-    const dishes = brand === 'SOR' ? await getDishes(deps.db as unknown as Tx, rows.map((r) => r.product.id)) : new Map();
+    const sorIds = rows.filter((r) => r.product.brand === 'SOR').map((r) => r.product.id);
+    const stopped = await stoppedProductIds(deps, store_id, sorIds);
+    const dishes = await getDishes(deps.db as unknown as Tx, sorIds);
     return {
       items: rows.map((r) => ({
         product_id: r.product.id,
@@ -159,9 +164,10 @@ export async function registerCatalog(app: FastifyInstance, deps: AppDeps) {
         price_dirams: r.priceDirams,
         old_price_dirams: r.oldPriceDirams,
         // остаток числом не отдаётся — только признак (ТЗ §4); для SOR наличие определяет стоп-лист (этап 1: всегда true)
-        in_stock: brand === 'SOR' ? !stopped.has(r.product.id) : r.available > 0,
+        in_stock: r.product.brand === 'SOR' ? !stopped.has(r.product.id) : r.available > 0,
         photo_url: r.product.photoUrl,
         modifiers: dishModifiersOrNull(dishes.get(r.product.id)?.modifiers),
+        from_kitchen: brand === 'LAB' && r.product.brand === 'SOR',
       })),
     };
   });

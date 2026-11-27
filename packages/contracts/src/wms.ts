@@ -18,6 +18,8 @@ export const PickItemView = z.object({
   status: OrderItemStatus,
   /** Замена по звонку клиенту: до этого момента сборщик ждёт решения, потом позиция остаётся убранной (ТЗ §11). */
   call_deadline: z.iso.datetime().nullable(),
+  /** Блюдо кухни в заказе Lablabu: не со склада, а со станции; ready — кухня отметила готовность. */
+  kitchen: z.object({ ready: z.boolean(), station: z.string() }).nullable(),
   /** Ячейки, где зарезервирован товар, в порядке обхода. */
   cells: z.array(z.object({ cell_code: z.string(), qty: Qty, pick_seq: z.number().int() })),
 });

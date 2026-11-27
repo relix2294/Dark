@@ -30,6 +30,10 @@ export async function registerKds(app: FastifyInstance, deps: AppDeps) {
   r.post('/kds/orders/:id/packed', { schema: { tags, security: sec, params: KdsOrderIdParams, response: { 200: PackedView } } }, async (req) =>
     svc.packed(deps, requireStaff(req.principal, 'kds.queue'), req.params.id),
   );
+  /** Сборщик забирает готовое блюдо кухни для заказа Lablabu (ТЗ §8, этап 2). */
+  r.post('/kds/handoff/:id', { schema: { tags, security: sec, params: KdsItemIdParams } }, async (req) =>
+    svc.handOffToPicker(deps, requireStaff(req.principal, 'wms.pick'), req.params.id),
+  );
   r.get('/kds/stop-list', { schema: { tags, security: sec, response: { 200: StopListView } } }, async (req) => svc.getStopList(deps, requireStaff(req.principal, 'kds.stop_list')));
   r.put('/kds/stop-list', { schema: { tags, security: sec, body: StopListRequest, response: { 200: StopListView } } }, async (req) =>
     svc.setStopList(deps, requireStaff(req.principal, 'kds.stop_list'), req.body),

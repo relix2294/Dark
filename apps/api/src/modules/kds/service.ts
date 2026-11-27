@@ -7,7 +7,7 @@ import { AppError, notFound } from '../../shared/errors/index.js';
 import { publish } from '../../shared/events/outbox.js';
 import { loadParams } from '../../shared/params/load.js';
 import { getDishes } from '../catalog/index.js';
-import { markAllItemsPicked, setPromisedAt, transition } from '../orders/index.js';
+import { markAllItemsPicked, markItemPicked, setPromisedAt, transition } from '../orders/index.js';
 import { consumeIngredients } from '../wms/index.js';
 import { dishColor, scheduleOrder, sorPromise, type StationLoad } from './schedule.js';
 
@@ -55,7 +55,14 @@ export async function estimateReady(tx: Tx, storeId: string, items: { productId:
  * Заказ SOR оплачен: разложить блюда по станциям и посчитать обещание клиенту.
  * Вызывается из orders в той же транзакции, что и переход в paid_hold.
  */
-export async function enqueueOrder(tx: Tx, deps: AppDeps, o: { id: string; storeId: string }, items: { id: string; productId: string; qtyOrdered: number }[], travelMs: number) {
+export async function enqueueOrder(
+  tx: Tx,
+  deps: AppDeps,
+  o: { id: string; storeId: string },
+  items: { id: string; productId: string; qtyOrdered: number }[],
+  travelMs: number,
+  opts: { setPromise?: boolean } = {},
+) {
   const now = deps.clock.now();
   const dishes = await getDishes(tx, items.map((i) => i.productId));
   const toCook = items
@@ -77,6 +84,7 @@ export async function enqueueOrder(tx: Tx, deps: AppDeps, o: { id: string; store
       targetReadyAt: d.targetReadyAt,
     })),
   );
+  if (opts.setPromise === false) return { targetReadyAt: plan.targetReadyAt, promisedAt: null };
   const promisedAt = sorPromise(plan.targetReadyAt, (await loadParams(tx, o.storeId)).SOR_PREASSIGN_MS, travelMs);
   await setPromisedAt(tx, o.id, promisedAt);
   return { targetReadyAt: plan.targetReadyAt, promisedAt };
@@ -112,8 +120,9 @@ export async function queue(deps: AppDeps, me: StaffPrincipal, station: Station)
   const storeId = storeOf(me);
   const now = deps.clock.now();
   return deps.db.transaction(async (tx) => {
-    const active = tx.select({ id: order.id }).from(order).where(and(eq(order.storeId, storeId), inArray(order.status, ['paid_hold', 'cooking'])));
-    const items = await itemViews(tx, now, and(eq(kdsItem.storeId, storeId), eq(kdsItem.station, station), inArray(kdsItem.orderId, active)));
+    // заказы SOR в готовке и заказы LAB в сборке (их блюда кухни, этап 2); блюдо, отданное сборщику, из очереди уходит
+    const active = tx.select({ id: order.id }).from(order).where(and(eq(order.storeId, storeId), inArray(order.status, ['paid_hold', 'cooking', 'picking'])));
+    const items = await itemViews(tx, now, and(eq(kdsItem.storeId, storeId), eq(kdsItem.station, station), inArray(kdsItem.orderId, active), sql`${orderItem.status} <> 'picked'`));
     return { station, now: now.toISOString(), items };
   });
 }
@@ -127,7 +136,7 @@ export async function start(deps: AppDeps, me: StaffPrincipal, itemId: string) {
     if (k.startedAt) throw new AppError('INVALID_TRANSITION', 'Блюдо уже в работе');
     await tx.update(kdsItem).set({ startedAt: now }).where(eq(kdsItem.id, k.id));
     const [o] = await tx.select().from(order).where(eq(order.id, k.orderId)).for('update');
-    if (o?.status === 'paid_hold') await transition(tx, o.id, 'paid_hold', 'cooking', 'staff', me.staff_id);
+    if (o?.brand === 'SOR' && o.status === 'paid_hold') await transition(tx, o.id, 'paid_hold', 'cooking', 'staff', me.staff_id);
     const [v] = await itemViews(tx, now, eq(kdsItem.id, k.id));
     return v!;
   });
@@ -212,6 +221,28 @@ export async function writeOffStartedDishes(tx: Tx, storeId: string, orderId: st
   const lines = started.flatMap((s) => (dishes.get(s.productId)?.recipe ?? []).map((r) => ({ productId: r.product_id, grams: r.grams * s.qty })));
   await consumeIngredients(tx, storeId, orderId, lines, actorId, `отмена после начала готовки: ${reason}`);
   return started.length;
+}
+
+/**
+ * Блюдо кухни в заказе Lablabu (ТЗ §8, этап 2): сборщик забирает готовое блюдо со станции перед закрытием сборки.
+ * Позиция заказа становится собранной, расход ингредиентов списывается по рецептуре.
+ */
+export async function handOffToPicker(deps: AppDeps, me: StaffPrincipal, orderItemId: string) {
+  const storeId = storeOf(me);
+  return deps.db.transaction(async (tx) => {
+    const [k] = await tx.select().from(kdsItem).where(and(eq(kdsItem.orderItemId, orderItemId), eq(kdsItem.storeId, storeId))).for('update');
+    if (!k) throw notFound('Блюдо кухни', orderItemId);
+    if (!k.doneAt) throw new AppError('INVALID_TRANSITION', 'Блюдо ещё не готово');
+    const [o] = await tx.select().from(order).where(eq(order.id, k.orderId));
+    if (o?.brand !== 'LAB' || o.status !== 'picking') throw new AppError('INVALID_TRANSITION', 'Передача сборщику — только для заказа Lablabu в сборке');
+    const [it] = await tx.select().from(orderItem).where(eq(orderItem.id, orderItemId));
+    if (!it || it.status !== 'pending') throw new AppError('INVALID_TRANSITION', 'Позиция уже собрана');
+    await markItemPicked(tx, it.id, it.qtyOrdered, false);
+    const dishes = await getDishes(tx, [it.productId]);
+    const lines = (dishes.get(it.productId)?.recipe ?? []).map((r) => ({ productId: r.product_id, grams: r.grams * it.qtyOrdered }));
+    await consumeIngredients(tx, storeId, o.id, lines, me.staff_id);
+    return { order_item_id: it.id, picked: true };
+  });
 }
 
 export async function getStopList(deps: AppDeps, me: StaffPrincipal) {

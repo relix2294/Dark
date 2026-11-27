@@ -42,6 +42,11 @@ async function quoteInTx(tx: Tx, deps: AppDeps, me: CustomerPrincipal, input: Ca
     fee = zone.feeDirams;
   }
   const products = await priceProducts(deps, store.id, input.items.map((i) => i.product_id));
+  // позиция другого бренда допустима только одна: блюдо кухни в заказе Lablabu на точке с Sor Box (ТЗ §8, этап 2)
+  for (const p of products.values()) {
+    const kitchenInLab = input.brand === 'LAB' && p.brand === 'SOR' && p.modifiersRaw !== null && store.brands.includes('SOR');
+    if (p.brand !== input.brand && !kitchenInLab) throw new AppError('VALIDATION', `${p.nameRu}: товар другого бренда`, { product_id: p.id });
+  }
   const draft = priceCart(input.items, products, fee, 0, { applied: null, error: null });
 
   let discount = 0;
@@ -183,8 +188,10 @@ export async function createOrder(deps: AppDeps, me: CustomerPrincipal, input: C
     if (q.promoRule) await recordUse(tx, q.promoRule, me.customer_id, o!.id, q.discount);
     // Резерв с блокировкой строк партий ДО холда: второй покупатель последней единицы получает OUT_OF_STOCK,
     // деньги не трогаются (ТЗ §11). При отказе банка резерв снимается в tx2.
-    if (input.brand === 'LAB')
-      await reserveForOrder(tx, q.store.id, o!.id, items.map((i) => ({ orderItemId: i.id, productId: i.productId, qty: i.qtyOrdered })), now, params.MIN_SHELF_LIFE_PCT);
+    // блюда кухни в заказе Lablabu не резервируются на складе — их готовит кухня
+    const stockItems = items.filter((i) => q.products.get(i.productId)?.brand === 'LAB');
+    if (input.brand === 'LAB' && stockItems.length)
+      await reserveForOrder(tx, q.store.id, o!.id, stockItems.map((i) => ({ orderItemId: i.id, productId: i.productId, qty: i.qtyOrdered })), now, params.MIN_SHELF_LIFE_PCT);
 
     const hasWeighted = input.items.some((i) => q.products.get(i.product_id)?.isWeighted);
     const hold = holdAmount(q.cart.total_dirams, input.brand === 'LAB' && hasWeighted, params.HOLD_BUFFER_PCT);
@@ -204,10 +211,10 @@ export async function createOrder(deps: AppDeps, me: CustomerPrincipal, input: C
     await applyHoldResult(tx, created.paymentId, created.idemKey, res);
     if (res.ok) {
       await transition(tx, created.o.id, 'created', 'paid_hold', 'system', null);
-      if (created.o.brand === 'SOR') {
-        const travelMs = travelMinutes(created.store, created.addr, 'bike') * 60_000;
-        await enqueueOrder(tx, deps, created.o, created.items, travelMs);
-      }
+      const travelMs = travelMinutes(created.store, created.addr, 'bike') * 60_000;
+      if (created.o.brand === 'SOR') await enqueueOrder(tx, deps, created.o, created.items, travelMs);
+      // блюда кухни в заказе Lablabu — в очередь станций; обещание Lablabu не меняется
+      else await enqueueOrder(tx, deps, created.o, created.items, travelMs, { setPromise: false });
     } else if (res.reason !== 'timeout') {
       // заказ остаётся created при таймауте: сверка опросит status() (ТЗ §5 п.4)
       await unreserve(tx, created.items.map((i) => i.id));

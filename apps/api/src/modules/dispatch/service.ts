@@ -339,6 +339,9 @@ export async function dispatchStore(deps: AppDeps, storeId: string): Promise<{ a
       else if (o.brand === 'LAB') {
         const [pt] = await tx.select().from(pickTask).where(eq(pickTask.orderId, o.id));
         readyEta = new Date((pt?.startedAt ?? now).getTime() + P.LAB_PICK_SLA_MS);
+        // блюдо кухни в заказе Lablabu: заказ готов не раньше блюда (этап 2 ТЗ §8)
+        const [k] = await tx.select({ t: sql<Date | null>`max(${kdsItem.targetReadyAt})` }).from(kdsItem).where(eq(kdsItem.orderId, o.id));
+        if (k?.t && new Date(k.t) > readyEta) readyEta = new Date(k.t);
       } else {
         const [k] = await tx.select({ t: sql<Date>`max(${kdsItem.targetReadyAt})` }).from(kdsItem).where(eq(kdsItem.orderId, o.id));
         readyEta = k?.t ? new Date(k.t) : new Date(now.getTime() + P.SOR_PROMISE_MS);

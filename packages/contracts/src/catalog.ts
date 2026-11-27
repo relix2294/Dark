@@ -42,5 +42,7 @@ export const CatalogItem = z.object({
   photo_url: z.string().nullable(),
   /** Только у блюд Sor Box с вариантами. */
   modifiers: DishModifiers.nullable(),
+  /** Блюдо кухни Sor Box в каталоге Lablabu (ТЗ §8, этап 2): готовится на кухне, сборщик забирает со станции. */
+  from_kitchen: z.boolean(),
 });
 export const CatalogResponse = z.object({ items: z.array(CatalogItem) });

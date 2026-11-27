@@ -139,7 +139,9 @@ function Shop({ onLogout }: { onLogout: () => void }) {
             {(catalog.data?.items ?? []).map((p) => (
               <Card key={p.product_id} tone={p.in_stock ? undefined : 'grey'}>
                 <div className="row">
-                  <b>{p.name_ru}</b>
+                  <b>
+                    {p.name_ru} {p.from_kitchen && <Badge tone="yellow">с кухни Sor Box</Badge>}
+                  </b>
                   <span>{somoni(p.price_dirams)}{p.is_weighted ? '/кг' : ''}</span>
                 </div>
                 {!p.in_stock ? (

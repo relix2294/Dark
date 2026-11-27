@@ -4,6 +4,7 @@ import type { PricedProduct } from '../catalog/index.js';
 
 const p = (id: string, price: number, available: number, isWeighted = false): PricedProduct => ({
   id,
+  brand: 'LAB',
   nameRu: id,
   isWeighted,
   isActive: true,

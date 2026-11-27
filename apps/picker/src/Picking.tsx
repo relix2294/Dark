@@ -73,6 +73,12 @@ export function Picking() {
     },
   });
   const offline = queue.items.length > 0;
+  // блюдо кухни (этап 2 ТЗ §8): забрать со станции, когда кухня отметила готовность
+  const handoff = useMutation({
+    mutationFn: (orderItemId: string) => api.post(`/kds/handoff/${orderItemId}`),
+    onSuccess: refresh,
+    onError: setError,
+  });
   const missing = useMutation({
     mutationFn: (p: { order_item_id: string; decision?: 'auto' | 'remove' }) => api.post<Task>(`/wms/pick-tasks/${t!.task_id}/missing`, p),
     onSuccess: (data) => {
@@ -188,16 +194,27 @@ export function Picking() {
           </Card>
         ))}
       {t.items.map((i) => (
-        <Card key={i.order_item_id} tone={i.status === 'picked' ? 'done' : i.status === 'missing' ? 'red' : cell && i.cells.some((c) => c.cell_code === cell) ? 'yellow' : undefined} onClick={() => { if (i.status === 'pending') setItem(i); }}>
+        <Card key={i.order_item_id} tone={i.status === 'picked' ? 'done' : i.status === 'missing' ? 'red' : cell && i.cells.some((c) => c.cell_code === cell) ? 'yellow' : undefined} onClick={() => { if (i.status === 'pending' && !i.kitchen) setItem(i); }}>
           <div className="row">
             <b>{i.name}</b>
             <Badge tone={i.status === 'picked' ? 'green' : i.status === 'missing' ? 'red' : 'grey'}>
               {i.is_weighted ? (i.status === 'picked' ? `${i.qty_picked} г` : `~${i.qty_ordered} г`) : `${i.qty_picked}/${i.qty_ordered}`}
             </Badge>
           </div>
-          <div className="muted">
-            {i.cells.map((c) => `${c.cell_code} ×${c.qty}`).join(', ') || 'ячейка не назначена'} · {i.temp_zone}
-          </div>
+          {i.kitchen ? (
+            <div className="row">
+              <span className="muted">С кухни, станция {i.kitchen.station}: {i.kitchen.ready ? 'готово' : 'готовится'}</span>
+              {i.status === 'pending' && (
+                <Button primary={i.kitchen.ready} disabled={!i.kitchen.ready || handoff.isPending || offline} onClick={() => handoff.mutate(i.order_item_id)}>
+                  Забрал с кухни
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div className="muted">
+              {i.cells.map((c) => `${c.cell_code} ×${c.qty}`).join(', ') || 'ячейка не назначена'} · {i.temp_zone}
+            </div>
+          )}
         </Card>
       ))}
       {item && item.status === 'pending' && (

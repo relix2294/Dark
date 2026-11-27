@@ -69,6 +69,7 @@ function StationQueue({ station }: { station: Station }) {
               <h2>{i.name}</h2>
               <Badge tone={i.color === 'red' ? 'red' : i.color === 'yellow' ? 'yellow' : i.color === 'done' ? 'green' : 'grey'}>×{i.qty}</Badge>
             </div>
+            {i.order_number.startsWith('L-') && <Badge tone="blue">Lablabu — заберёт сборщик</Badge>}
             <div className="muted">
               Заказ {i.order_number} · старт {time(i.start_at)} · готовность {time(i.target_ready_at)} ({minutesLeft(i.target_ready_at)})
             </div>
