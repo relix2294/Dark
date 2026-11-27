@@ -256,7 +256,17 @@ async function stocktakeView(tx: Tx, st: typeof stocktake.$inferSelect) {
  * Ежедневная выборочная инвентаризация (ТЗ §7): в открытый daily-пересчёт точки добавляются все ячейки с дорогим
  * товаром (ячейки с недобором при сборке попадают туда в течение дня из сценария «нет на полке»).
  */
-export async function planDailyStocktake(tx: Tx, storeId: string) {
+/** День недели 0 (пн) … 6 (вс) в часовом поясе точки. */
+export function weekdayIndex(now: Date, tz: string): number {
+  const wd = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(now);
+  return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(wd);
+}
+
+/**
+ * План дня (ТЗ §7): дорогой товар каждый день; с round — ещё седьмая часть всех ячеек по порядку обхода,
+ * так что за неделю склад пересчитывается полным кругом.
+ */
+export async function planDailyStocktake(tx: Tx, storeId: string, round?: { now: Date; tz: string }) {
   const [open] = await tx.select().from(stocktake).where(and(eq(stocktake.storeId, storeId), eq(stocktake.status, 'open'), eq(stocktake.scope, 'daily')));
   const st = open ?? (await tx.insert(stocktake).values({ storeId, scope: 'daily', status: 'open' }).returning())[0]!;
   const hv = await tx
@@ -265,6 +275,19 @@ export async function planDailyStocktake(tx: Tx, storeId: string) {
     .innerJoin(product, eq(product.id, stockLot.productId))
     .where(and(eq(stockLot.storeId, storeId), eq(product.isHighValue, true), sql`${stockLot.cellId} is not null`, sql`${stockLot.qty} > 0`))
     .groupBy(stockLot.cellId, stockLot.productId);
+  if (round) {
+    const cells = await tx.select({ id: cell.id }).from(cell).where(eq(cell.storeId, storeId)).orderBy(cell.pickSeq, cell.code);
+    const day = weekdayIndex(round.now, round.tz);
+    const todays = cells.filter((_, i) => i % 7 === day).map((c) => c.id);
+    if (todays.length) {
+      const inRound = await tx
+        .select({ cellId: stockLot.cellId, productId: stockLot.productId, qty: sql<number>`sum(${stockLot.qty})::int` })
+        .from(stockLot)
+        .where(and(eq(stockLot.storeId, storeId), inArray(stockLot.cellId, todays), sql`${stockLot.qty} > 0`))
+        .groupBy(stockLot.cellId, stockLot.productId);
+      for (const r of inRound) if (!hv.some((h) => h.cellId === r.cellId && h.productId === r.productId)) hv.push(r);
+    }
+  }
   const existing = await tx.select().from(stocktakeLine).where(eq(stocktakeLine.stocktakeId, st.id));
   const fresh = hv.filter((h) => !existing.some((e) => e.cellId === h.cellId && e.productId === h.productId));
   if (fresh.length) await tx.insert(stocktakeLine).values(fresh.map((h) => ({ stocktakeId: st.id, cellId: h.cellId!, productId: h.productId, qtySystem: h.qty })));

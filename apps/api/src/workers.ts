@@ -87,9 +87,9 @@ export async function startWorkers(deps: AppDeps, log: FastifyBaseLogger) {
 
   await boss.work('housekeeping', async () => {
     const now = deps.clock.now();
-    // утренний план выборочной инвентаризации: дорогие товары во всех ячейках с камерой (ТЗ §7)
+    // утренний план инвентаризации (ТЗ §7): дорогие товары и седьмая часть ячеек — полный круг за неделю
     const stores = await deps.db.select({ id: store.id }).from(store).where(eq(store.isActive, true));
-    for (const s of stores) await deps.db.transaction((tx) => planDailyStocktake(tx, s.id));
+    for (const s of stores) await deps.db.transaction((tx) => planDailyStocktake(tx, s.id, { now, tz: deps.config.DISPLAY_TZ }));
     await purgeAttempts(deps.db, now);
     await deps.db.delete(courierPosition).where(lt(courierPosition.at, new Date(now.getTime() - 30 * 86_400_000)));
     await deps.db.delete(idempotencyKey).where(and(lt(idempotencyKey.createdAt, new Date(now.getTime() - 7 * 86_400_000)), sql`${idempotencyKey.completedAt} is not null`));
