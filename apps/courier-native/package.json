@@ -1,0 +1,30 @@
+{
+  "name": "dark-courier-native",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Приложение курьера: экраны из веб-приложения /courier в WebView + нативная фоновая геопозиция (ТЗ §6, §9, ADR-006).",
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types src/*.test.ts",
+    "build:apk": "eas build -p android --profile preview"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo": "^58.0.0",
+    "expo-constants": "~58.0.16",
+    "expo-location": "~58.0.23",
+    "expo-secure-store": "~58.0.3",
+    "expo-status-bar": "~58.0.5",
+    "expo-task-manager": "~58.0.14",
+    "react": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-webview": "14.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.3",
+    "typescript": "^5.9.3"
+  }
+}

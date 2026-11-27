@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "Dark Курьер",
+    "slug": "dark-courier",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#111318",
+    "android": {
+      "package": "tj.dark.courier",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "CAMERA"
+      ]
+    },
+    "ios": {
+      "bundleIdentifier": "tj.dark.courier",
+      "infoPlist": {
+        "UIBackgroundModes": ["location"],
+        "NSLocationWhenInUseUsageDescription": "Геопозиция нужна, чтобы назначать вам ближайшие заказы и показывать клиенту, где курьер.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Во время смены геопозиция передаётся и при свёрнутом приложении — так диспетчер видит, где вы."
+      }
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true,
+          "locationAlwaysAndWhenInUsePermission": "Во время смены геопозиция передаётся и при свёрнутом приложении — так диспетчер видит, где вы."
+        }
+      ],
+      "expo-secure-store",
+      "expo-status-bar"
+    ],
+    "extra": {
+      "serverUrl": "http://localhost:8090"
+    }
+  }
+}

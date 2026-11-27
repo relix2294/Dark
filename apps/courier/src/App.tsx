@@ -30,7 +30,9 @@ export function App() {
     const w = navigator.geolocation.watchPosition(
       (p) => {
         setGeo(p);
-        queue.current.push({ lat: p.coords.latitude, lon: p.coords.longitude, at: new Date(p.timestamp).toISOString(), accuracy_m: p.coords.accuracy });
+        // внутри нативного приложения точки шлёт оно само, в том числе в фоне — здесь только для кнопки «Доставлено»
+        if (!(window as { DARK_NATIVE?: boolean }).DARK_NATIVE)
+          queue.current.push({ lat: p.coords.latitude, lon: p.coords.longitude, at: new Date(p.timestamp).toISOString(), accuracy_m: p.coords.accuracy });
       },
       () => undefined,
       { enableHighAccuracy: true, maximumAge: 2000 },

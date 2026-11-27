@@ -27,7 +27,8 @@ apps/storefront     витрина клиента внутри DC Next (React PW
 apps/backoffice     админка + пульт старшего смены (React)            /office
 apps/kds            экран кухни (React, планшет)                      /kds
 apps/picker         терминал сборщика (React PWA, Android-терминал)   /picker
-apps/courier        приложение курьера (React PWA, затем Expo)        /courier
+apps/courier        приложение курьера (React PWA)                    /courier
+apps/courier-native то же в нативной обёртке Expo: геопозиция в фоне (свой npm, вне pnpm)
 packages/contracts  zod-схемы API: единственный источник типов для сервера и клиентов
 packages/ui         общее для клиентов: API-клиент, вход по PIN, компоненты, хук сканера
 deploy/             docker-compose + Caddy для VPS
@@ -97,7 +98,7 @@ pnpm check                      # границы модулей, типы, те�
 
 ## Что дальше
 
-1. Expo-обёртка курьера для фоновой геопозиции и пушей.
+1. Собрать APK курьера (`apps/courier-native/README.md`) и пуши курьеру о новом задании (нужен проект Firebase).
 2. Свой сервер тайлов или коммерческий провайдер карт для продакшена (`VITE_TILES_URL`): публичные тайлы OSM не для нагрузки.
 3. Реальный адаптер кошелька DC и проверка токена DC Next после ответа банка; формат реестра для ночной сверки.
 
