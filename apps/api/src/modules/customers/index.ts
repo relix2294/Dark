@@ -1,9 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { eq } from 'drizzle-orm';
-import { AuthResponse, DcAuthRequest, StaffLoginRequest } from '@dark/contracts';
+import { AddressCreate, AddressListView, AddressView, AuthResponse, DcAuthRequest, StaffLoginRequest } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
-import { customer, userStaff } from '../../shared/db/schema/index.js';
+import { address, customer, userStaff } from '../../shared/db/schema/index.js';
+import { requireCustomer } from '../../shared/auth/index.js';
 import { AppError } from '../../shared/errors/index.js';
 import { verifyPin } from '../../shared/auth/index.js';
 
@@ -63,4 +64,32 @@ export async function registerCustomers(app: FastifyInstance, deps: AppDeps) {
       return { token, expires_at: expiresAt.toISOString() };
     },
   );
+
+  const toView = (a: typeof address.$inferSelect) => ({
+    id: a.id,
+    lat: a.lat,
+    lon: a.lon,
+    street: a.street,
+    house: a.house,
+    entrance: a.entrance,
+    floor: a.floor,
+    flat: a.flat,
+    comment: a.comment,
+  });
+
+  r.get('/addresses', { schema: { tags: ['storefront'], security: [{ bearer: [] }], response: { 200: AddressListView } } }, async (req) => {
+    const me = requireCustomer(req.principal);
+    const rows = await deps.db.select().from(address).where(eq(address.customerId, me.customer_id)).orderBy(address.createdAt);
+    return { addresses: rows.map(toView) };
+  });
+
+  r.post('/addresses', { schema: { tags: ['storefront'], security: [{ bearer: [] }], body: AddressCreate, response: { 201: AddressView } } }, async (req, reply) => {
+    const me = requireCustomer(req.principal);
+    const b = req.body;
+    const [a] = await deps.db
+      .insert(address)
+      .values({ customerId: me.customer_id, lat: b.lat, lon: b.lon, street: b.street, house: b.house, entrance: b.entrance ?? null, floor: b.floor ?? null, flat: b.flat ?? null, comment: b.comment ?? null })
+      .returning();
+    return reply.status(201).send(toView(a!));
+  });
 }

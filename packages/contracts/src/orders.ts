@@ -87,3 +87,18 @@ export type OrderView = z.infer<typeof OrderView>;
 export const CancelOrderRequest = z.object({ reason: z.string().max(200).optional() });
 
 export const OrderIdParams = z.object({ id: Uuid });
+
+export const OrderListView = z.object({ orders: z.array(OrderView) });
+
+export const AddressCreate = z.object({
+  lat: z.number().min(-90).max(90),
+  lon: z.number().min(-180).max(180),
+  street: z.string().min(1).max(120),
+  house: z.string().min(1).max(20),
+  entrance: z.string().max(10).optional(),
+  floor: z.string().max(10).optional(),
+  flat: z.string().max(10).optional(),
+  comment: z.string().max(200).optional(),
+});
+export const AddressView = AddressCreate.extend({ id: Uuid, entrance: z.string().nullable(), floor: z.string().nullable(), flat: z.string().nullable(), comment: z.string().nullable() });
+export const AddressListView = z.object({ addresses: z.array(AddressView) });

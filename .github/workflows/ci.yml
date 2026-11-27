@@ -42,6 +42,8 @@ jobs:
         run: pnpm test
         env:
           TEST_DATABASE_URL: postgres://dark:dark@127.0.0.1:5432/dark_test
+      - name: Сборка фронтов
+        run: pnpm build:web
       - name: Схема и миграции не расходятся
         run: pnpm db:generate && git diff --exit-code -- apps/api/drizzle
         env:

@@ -1,9 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { CancelOrderRequest, CartRequest, CartResponse, CreateOrderRequest, OrderIdParams, OrderView } from '@dark/contracts';
+import { CancelOrderRequest, CartRequest, CartResponse, CreateOrderRequest, OrderIdParams, OrderListView, OrderView } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
 import { requireCustomer } from '../../shared/auth/index.js';
-import { cancelByCustomer, createOrder, getOrderView, quoteCart } from './service.js';
+import { cancelByCustomer, createOrder, getOrderView, listOrders, quoteCart } from './service.js';
 import { openOrderStream } from './stream.js';
 
 export { transition, cancelByStaff, markPaymentFailed, consoleOrders } from './service.js';
@@ -25,6 +25,8 @@ export async function registerOrders(app: FastifyInstance, deps: AppDeps) {
       return reply.status(201).send(view);
     },
   );
+
+  r.get('/orders', { schema: { tags: ['storefront'], security: [{ bearer: [] }], response: { 200: OrderListView } } }, async (req) => listOrders(deps, requireCustomer(req.principal)));
 
   r.get('/orders/:id', { schema: { tags: ['storefront'], security: [{ bearer: [] }], params: OrderIdParams, response: { 200: OrderView } } }, async (req) =>
     getOrderView(deps, req.params.id, requireCustomer(req.principal)),

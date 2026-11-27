@@ -334,3 +334,11 @@ export async function consoleOrders(deps: AppDeps, storeId: string) {
   }
   return { orders: out };
 }
+
+/** История заказов клиента (последние 50) и повтор заказа — на клиенте по составу. */
+export async function listOrders(deps: AppDeps, me: CustomerPrincipal) {
+  const rows = await deps.db.select({ id: order.id }).from(order).where(eq(order.customerId, me.customer_id)).orderBy(sql`${order.createdAt} desc`).limit(50);
+  const orders = [];
+  for (const r of rows) orders.push(await getOrderView(deps, r.id, me));
+  return { orders };
+}
