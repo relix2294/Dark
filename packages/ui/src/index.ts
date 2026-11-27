@@ -6,3 +6,4 @@ export * from './scanner.js';
 export * from './realtime.js';
 export * from './offline.js';
 export * from './map.js';
+export * from './ean13.js';

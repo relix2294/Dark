@@ -170,6 +170,23 @@ export function Picking() {
         </div>
       ))}
       <div className="muted">Ячейка: {cell ? <b style={{ color: 'var(--text)' }}>{cell}</b> : 'отсканируйте ячейку'}</div>
+      {t.items
+        .filter((i) => i.call_deadline && new Date(i.call_deadline).getTime() > Date.now())
+        .map((i) => (
+          <Card key={`call-${i.order_item_id}`} tone="red">
+            <h2>Позвоните клиенту: {i.name}</h2>
+            <div className="big">{Math.max(0, Math.ceil((new Date(i.call_deadline!).getTime() - Date.now()) / 1000))} с</div>
+            <div className="muted">Нет ответа за 60 секунд — позиция остаётся убранной, сборка продолжается.</div>
+            <div className="row">
+              <Button primary disabled={offline} onClick={() => missing.mutate({ order_item_id: i.order_item_id, decision: 'auto' })}>
+                Согласен на замену
+              </Button>
+              <Button danger disabled={offline} onClick={() => missing.mutate({ order_item_id: i.order_item_id, decision: 'remove' })}>
+                Убрать
+              </Button>
+            </div>
+          </Card>
+        ))}
       {t.items.map((i) => (
         <Card key={i.order_item_id} tone={i.status === 'picked' ? 'done' : i.status === 'missing' ? 'red' : cell && i.cells.some((c) => c.cell_code === cell) ? 'yellow' : undefined} onClick={() => { if (i.status === 'pending') setItem(i); }}>
           <div className="row">

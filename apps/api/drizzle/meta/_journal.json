@@ -22,6 +22,13 @@
       "when": 1795781181092,
       "tag": "0002_wms_pick_task",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795785840612,
+      "tag": "0003_internal_barcode",
+      "breakpoints": true
     }
   ]
 }

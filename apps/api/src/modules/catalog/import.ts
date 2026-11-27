@@ -7,6 +7,7 @@ import type { AppDeps } from '../../app.js';
 import type { Tx } from '../../shared/db/client.js';
 import { category, price, product } from '../../shared/db/schema/index.js';
 import { audit } from '../../shared/audit.js';
+import { nextInternalBarcode } from './admin.js';
 import { requireStaff } from '../../shared/auth/index.js';
 
 /**
@@ -105,7 +106,8 @@ export async function registerCatalogImport(app: FastifyInstance, deps: AppDeps)
             ...(row.is_active !== undefined && { isActive: row.is_active }),
           };
           const ex = existing.get(row.sku);
-          const id = ex ? ex.id : (await tx.insert(product).values({ brand, sku: row.sku, ...fields }).returning({ id: product.id }))[0]!.id;
+          const internal = !ex && brand === 'LAB' && row.barcodes.length === 0 ? { barcodes: [await nextInternalBarcode(tx)] } : {};
+          const id = ex ? ex.id : (await tx.insert(product).values({ brand, sku: row.sku, ...fields, ...internal }).returning({ id: product.id }))[0]!.id;
           if (ex) await tx.update(product).set(fields).where(eq(product.id, ex.id));
           if (row.price_dirams !== undefined) {
             const cur = curPrices.find((p) => p.productId === id);

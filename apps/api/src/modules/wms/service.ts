@@ -82,7 +82,11 @@ export async function taskView(tx: Tx, task: typeof pickTask.$inferSelect): Prom
         .filter((r) => r.refId === item.id)
         .map((r) => ({ cell_code: r.cellCode ?? '—', qty: r.qty, pick_seq: r.pickSeq ?? 9999 }))
         .sort((a, b) => a.pick_seq - b.pick_seq);
+      const mm = (item.missingMeta ?? {}) as Record<string, unknown>;
+      const callDeadline =
+        item.status === 'missing' && mm['call_required'] && !mm['call_resolved'] && typeof mm['at'] === 'string' ? new Date(new Date(mm['at']).getTime() + 60_000).toISOString() : null;
       return {
+        call_deadline: callDeadline,
         order_item_id: item.id,
         product_id: item.productId,
         name: item.nameSnapshot,
@@ -152,6 +156,19 @@ export async function missing(deps: AppDeps, me: StaffPrincipal, taskId: string,
     const rows = await getItemsWithProducts(tx, task.orderId);
     const hit = rows.find((r) => r.item.id === itemId);
     if (!hit) throw notFound('Позиция', itemId);
+    const meta0 = (hit.item.missingMeta ?? {}) as Record<string, unknown>;
+    // решение после звонка клиенту (ТЗ §7 п.4): позиция уже убрана, клиент согласился на замену или подтвердил удаление
+    if (hit.item.status === 'missing' && meta0['call_required'] && !meta0['call_resolved'] && decision) {
+      const resolved = { ...meta0, call_resolved: decision, resolved_by: me.staff_id, resolved_at: deps.clock.now().toISOString() };
+      if (decision === 'auto') {
+        const alt = await findReplacement(tx, deps, task.storeId, hit.product, hit.item.priceDirams, hit.item.qtyOrdered);
+        if (!alt) throw new AppError('OUT_OF_STOCK', 'Аналога не нашлось — позиция остаётся убранной');
+        const ni = await addReplacementItem(tx, hit.item, alt, resolved);
+        await reserveForOrder(tx, task.storeId, task.orderId, [{ orderItemId: ni.id, productId: alt.id, qty: ni.qtyOrdered }], deps.clock.now(), (await loadParams(tx, task.storeId)).MIN_SHELF_LIFE_PCT);
+      } else await markItemMissing(tx, itemId, resolved);
+      await recalcTotals(tx, task.orderId);
+      return taskView(tx, task);
+    }
     if (hit.item.status !== 'pending') throw new AppError('INVALID_TRANSITION', `Позиция уже ${hit.item.status}`);
 
     // ячейки с недобором — на пересчёт и обнуление остатка до инвентаризации

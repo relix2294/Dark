@@ -155,6 +155,7 @@ export const StockRow = z.object({
   product_id: Uuid,
   name: z.string(),
   sku: z.string(),
+  unit: z.string(),
   qty: z.number().int(),
   reserved_qty: z.number().int(),
   unplaced_qty: z.number().int(),
@@ -230,3 +231,34 @@ export const ImportResult = z.object({
   categories_created: z.array(z.string()),
   errors: z.array(z.object({ row: z.number().int(), message: z.string() })),
 });
+
+// ---------- сроки годности (ТЗ §7) ----------
+export const ExpiringRow = z.object({
+  lot_id: Uuid,
+  product_id: Uuid,
+  name: z.string(),
+  sku: z.string(),
+  cell_code: z.string().nullable(),
+  qty: z.number().int(),
+  expires_at: z.iso.datetime(),
+  left_pct: z.number(),
+  /** write_off — истёк; markdown — остаток срока ниже MIN_SHELF_LIFE_PCT (не резервируется) или ≤ 2 дней. */
+  action: z.enum(['write_off', 'markdown']),
+});
+export const ExpiringView = z.object({ rows: z.array(ExpiringRow) });
+
+// ---------- инвентаризация (ТЗ §7) ----------
+export const StocktakeCreate = z.object({ scope: z.enum(['cell', 'full']), cell_codes: z.array(z.string()).optional() });
+export const StocktakeLineAdmin = z.object({
+  id: Uuid,
+  cell_code: z.string(),
+  product_id: Uuid,
+  name: z.string(),
+  unit: z.string(),
+  qty_system: z.number().int(),
+  qty_fact: z.number().int().nullable(),
+  recount_required: z.boolean(),
+});
+export const StocktakeAdminView = z.object({ id: Uuid, scope: z.string(), status: z.string(), created_at: z.iso.datetime(), lines: z.array(StocktakeLineAdmin) });
+export const StocktakeListView = z.object({ stocktakes: z.array(StocktakeAdminView) });
+export const StocktakeApplyResult = z.object({ adjusted: z.number().int(), unchanged: z.number().int(), not_counted: z.number().int() });

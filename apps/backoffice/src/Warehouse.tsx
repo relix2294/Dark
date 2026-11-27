@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
-import type { CellListView, ProductListView, StockListView, SupplyListView } from '@dark/contracts';
+import type { CellListView, ExpiringView, ProductListView, StockListView, StocktakeListView, SupplyListView } from '@dark/contracts';
 import { Badge, Button, Card, ErrorBanner, Field, dateTime, useStaff } from '@dark/ui';
 
-type Tab = 'stock' | 'cells' | 'supplies';
+type Tab = 'stock' | 'expiring' | 'stocktake' | 'cells' | 'supplies';
 
 /** Склад точки: остатки, ячейки, документы поставки (ТЗ §7). */
 export function Warehouse({ storeId }: { storeId: string }) {
@@ -12,13 +12,21 @@ export function Warehouse({ storeId }: { storeId: string }) {
   return (
     <>
       <div className="tabs">
-        {(['stock', 'cells', 'supplies'] as Tab[]).map((t) => (
+        {(['stock', 'expiring', 'stocktake', 'cells', 'supplies'] as Tab[]).map((t) => (
           <button key={t} className={`tab${tab === t ? ' tab-active' : ''}`} onClick={() => setTab(t)}>
-            {{ stock: 'Остатки', cells: 'Ячейки', supplies: 'Поставки' }[t]}
+            {{ stock: 'Остатки', expiring: 'Сроки', stocktake: 'Инвентаризация', cells: 'Ячейки', supplies: 'Поставки' }[t]}
           </button>
         ))}
       </div>
-      {tab === 'stock' ? <Stock storeId={storeId} /> : tab === 'cells' ? <Cells storeId={storeId} /> : <Supplies storeId={storeId} />}
+      {
+        {
+          stock: <Stock storeId={storeId} />,
+          expiring: <Expiring storeId={storeId} />,
+          stocktake: <Stocktakes storeId={storeId} />,
+          cells: <Cells storeId={storeId} />,
+          supplies: <Supplies storeId={storeId} />,
+        }[tab]
+      }
     </>
   );
 }
@@ -46,7 +54,7 @@ function Stock({ storeId }: { storeId: string }) {
               <td>
                 {r.name} <span className="muted">{r.sku}</span>
               </td>
-              <td>{r.qty === 0 ? <Badge tone="red">0</Badge> : r.qty}</td>
+              <td>{r.qty === 0 ? <Badge tone="red">0</Badge> : `${r.qty} ${r.unit}`}</td>
               <td>{r.reserved_qty}</td>
               <td>{r.unplaced_qty > 0 ? <Badge tone="yellow">{r.unplaced_qty}</Badge> : 0}</td>
               <td>{r.nearest_expiry ? <span className={new Date(r.nearest_expiry).getTime() < soon ? 'badge badge-red' : ''}>{dateTime(r.nearest_expiry)}</span> : '—'}</td>
@@ -203,6 +211,118 @@ function Supplies({ storeId }: { storeId: string }) {
           ))}
         </tbody>
       </table>
+    </>
+  );
+}
+
+function Expiring({ storeId }: { storeId: string }) {
+  const { api } = useStaff();
+  const q = useQuery({ queryKey: ['expiring', storeId], queryFn: () => api.get<z.infer<typeof ExpiringView>>(`/admin/stores/${storeId}/expiring`) });
+  return (
+    <>
+      <div className="muted">Истёкшие — списать (запрос со сборочного терминала или старшим смены). С малым остатком срока — на уценку: такие партии не резервируются под заказы.</div>
+      <ErrorBanner error={q.error} />
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Действие</th>
+            <th>Товар</th>
+            <th>Ячейка</th>
+            <th>Количество</th>
+            <th>Годен до</th>
+            <th>Остаток срока</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(q.data?.rows ?? []).map((r) => (
+            <tr key={r.lot_id}>
+              <td>{r.action === 'write_off' ? <Badge tone="red">списать</Badge> : <Badge tone="yellow">уценить</Badge>}</td>
+              <td>
+                {r.name} <span className="muted">{r.sku}</span>
+              </td>
+              <td>{r.cell_code ?? '—'}</td>
+              <td>{r.qty}</td>
+              <td>{dateTime(r.expires_at)}</td>
+              <td>{r.left_pct} %</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {q.data && q.data.rows.length === 0 && <div className="empty">Просроченных и уходящих по сроку партий нет</div>}
+    </>
+  );
+}
+
+function Stocktakes({ storeId }: { storeId: string }) {
+  const { api, session } = useStaff();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['stocktakes', storeId], queryFn: () => api.get<z.infer<typeof StocktakeListView>>(`/admin/stores/${storeId}/stocktakes`) });
+  const [cells, setCells] = useState('');
+  const create = useMutation({
+    mutationFn: (scope: 'cell' | 'full') => api.post(`/admin/stores/${storeId}/stocktakes`, scope === 'full' ? { scope } : { scope, cell_codes: cells.split(/[,\s]+/).filter(Boolean).map((c) => c.toUpperCase()) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['stocktakes', storeId] }),
+  });
+  const apply = useMutation({
+    mutationFn: (id: string) => api.post<{ adjusted: number; unchanged: number; not_counted: number }>(`/admin/stores/${storeId}/stocktakes/${id}/apply`),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['stocktakes', storeId] }),
+  });
+  const canApply = session.principal.role === 'manager';
+  return (
+    <>
+      <Card>
+        <div className="row" style={{ flexWrap: 'wrap', justifyContent: 'flex-start' }}>
+          <input className="input" style={{ maxWidth: 360 }} placeholder="ячейки: A-01-1, A-02-1" value={cells} onChange={(e) => setCells(e.target.value)} />
+          <Button disabled={!cells || create.isPending} onClick={() => create.mutate('cell')}>
+            Пересчёт ячеек
+          </Button>
+          <Button disabled={create.isPending} onClick={() => create.mutate('full')}>
+            Полный круг
+          </Button>
+        </div>
+        <div className="muted">Считают на терминале. Расхождение выше допуска пересчитывает другой сотрудник. Применяет управляющий.</div>
+        <ErrorBanner error={create.error ?? apply.error} />
+        {apply.data && (
+          <div className="banner banner-ok">
+            Применено: изменено {apply.data.adjusted}, без изменений {apply.data.unchanged}, не посчитано {apply.data.not_counted}
+          </div>
+        )}
+      </Card>
+      {(q.data?.stocktakes ?? []).map((st) => {
+        const counted = st.lines.filter((l) => l.qty_fact !== null).length;
+        return (
+          <Card key={st.id} tone={st.status === 'open' ? 'yellow' : undefined}>
+            <div className="row">
+              <b>
+                {{ daily: 'Выборочная за день', cell: 'Ячейки', full: 'Полный круг' }[st.scope] ?? st.scope} · {dateTime(st.created_at)}
+              </b>
+              <span>
+                <Badge tone={st.status === 'open' ? 'yellow' : 'green'}>{st.status === 'open' ? 'идёт' : 'применена'}</Badge> посчитано {counted}/{st.lines.length}
+              </span>
+            </div>
+            <code className="muted" title="id для терминала">{st.id}</code>
+            <table className="table">
+              <tbody>
+                {st.lines.map((l) => (
+                  <tr key={l.id}>
+                    <td>{l.cell_code}</td>
+                    <td>{l.name}</td>
+                    <td>
+                      система {l.qty_system} {l.unit}
+                    </td>
+                    <td>{l.qty_fact === null ? <span className="muted">не посчитано</span> : `факт ${l.qty_fact} ${l.unit}`}</td>
+                    <td>{l.recount_required ? <Badge tone="red">нужен второй пересчёт</Badge> : l.qty_fact !== null && l.qty_fact !== l.qty_system ? <Badge tone="yellow">{l.qty_fact - l.qty_system > 0 ? '+' : ''}{l.qty_fact - l.qty_system}</Badge> : null}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {st.status === 'open' && canApply && (
+              <Button primary disabled={apply.isPending || counted === 0} onClick={() => apply.mutate(st.id)}>
+                Применить расхождения
+              </Button>
+            )}
+          </Card>
+        );
+      })}
     </>
   );
 }

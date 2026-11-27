@@ -28,7 +28,7 @@ import * as svc from './service.js';
 
 export { planReserve, isSellable, type Lot, type ReservePlan } from './reserve.js';
 export { suggestCells, rejectCell, type CellCandidate, type ProductToPlace } from './placement.js';
-export { registerWmsAdmin } from './admin.js';
+export { registerWmsAdmin, planDailyStocktake } from './admin.js';
 export { reserveForOrder, unreserve, reservedByLot, adjustLot, consumeIngredients, returnPickedItems } from './stock.js';
 
 export async function registerWms(app: FastifyInstance, deps: AppDeps) {

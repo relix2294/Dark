@@ -185,3 +185,10 @@ export async function returnPickedItems(tx: Tx, storeId: string, orderId: string
     }
   }
 }
+
+/** Излишек при инвентаризации: новая партия в ячейке, движение adjust (не приёмка — поставки не было). */
+export async function surplusLot(tx: Tx, p: { storeId: string; productId: string; cellId: string; qty: number; reason: string; actorId: string }) {
+  const [lot] = await tx.insert(stockLot).values({ storeId: p.storeId, productId: p.productId, cellId: p.cellId, qty: p.qty }).returning();
+  await tx.insert(stockMove).values({ storeId: p.storeId, productId: p.productId, lotId: lot!.id, type: 'adjust', qty: p.qty, reason: p.reason, actorId: p.actorId });
+  return lot!;
+}

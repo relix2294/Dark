@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
 import type { Brand, CategoryListView, ProductListView, ProductView } from '@dark/contracts';
-import { BRAND_RU, Badge, Button, Card, ErrorBanner, Field, somoni, useStaff } from '@dark/ui';
+import { BRAND_RU, Badge, Button, Card, Ean13, ErrorBanner, Field, somoni, useStaff } from '@dark/ui';
 
 type Product = z.infer<typeof ProductView>;
 
@@ -214,6 +214,16 @@ function ProductEditor({ storeId, brand, product, categories, onClose }: { store
         <Button primary disabled={!f.sku || !f.name_ru || save.isPending} onClick={() => save.mutate()}>
           Сохранить
         </Button>
+        {product && product.barcodes.length > 0 && (
+          <div className="row" style={{ justifyContent: 'flex-start' }}>
+            <div id={`label-${product.id}`} style={{ background: '#fff', color: '#000', padding: 8, borderRadius: 6 }}>
+              <div style={{ fontWeight: 700 }}>{product.name_ru}</div>
+              {cur && <div>{somoni(cur.price_dirams)}</div>}
+              <Ean13 code={product.barcodes[0]!} />
+            </div>
+            <Button onClick={() => printLabel(`label-${product.id}`)}>Печать этикетки</Button>
+          </div>
+        )}
         {brand === 'SOR' && product && (
           <>
             <h2>Блюдо</h2>
@@ -242,4 +252,16 @@ function ProductEditor({ storeId, brand, product, categories, onClose }: { store
       </Card>
     </div>
   );
+}
+
+/** Печать этикетки: отдельное окно только с этикеткой (принтер этикеток — системный диалог печати). */
+function printLabel(elementId: string) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  const w = window.open('', '_blank', 'width=400,height=300');
+  if (!w) return;
+  w.document.write(`<!doctype html><html><head><title>Этикетка</title><style>body{margin:0;font-family:sans-serif}@page{size:58mm 40mm;margin:2mm}</style></head><body>${el.outerHTML}</body></html>`);
+  w.document.close();
+  w.focus();
+  w.print();
 }

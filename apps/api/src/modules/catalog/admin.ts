@@ -33,6 +33,7 @@ import { category, deliveryZone, dish, price, product, store } from '../../share
 import { audit } from '../../shared/audit.js';
 import { requireStaff } from '../../shared/auth/index.js';
 import { AppError, notFound } from '../../shared/errors/index.js';
+import { internalEan13 } from '../../shared/barcode.js';
 
 /** Админка каталога (ТЗ §9): точки, категории, товары, цены с историей, блюда, зоны доставки. */
 
@@ -115,6 +116,11 @@ const productRow = (b: ProductFields) => ({
   ...(b.photo_url !== undefined && { photoUrl: b.photo_url }),
   ...(b.is_active !== undefined && { isActive: b.is_active }),
 });
+
+export async function nextInternalBarcode(tx: Tx): Promise<string> {
+  const r = await tx.execute<{ n: string }>(sql`select nextval('internal_barcode_seq') n`);
+  return internalEan13(Number(r.rows[0]!.n));
+}
 
 /** Штрихкод уникален среди товаров: иначе сборщик не отличит товар (ТЗ §7). */
 async function assertBarcodesFree(tx: Tx, barcodes: string[], exceptId?: string) {
@@ -208,7 +214,10 @@ export async function registerCatalogAdmin(app: FastifyInstance, deps: AppDeps) 
     const me = requireStaff(req.principal, 'catalog.write');
     const view = await deps.db.transaction(async (tx) => {
       await assertBarcodesFree(tx, req.body.barcodes);
-      const [p] = await tx.insert(product).values(productRow(req.body) as typeof product.$inferInsert).returning();
+      const row = productRow(req.body) as typeof product.$inferInsert;
+      // товару дарк-стора без штрихкода — внутренний EAN-13 (сборщик сканирует всё, ТЗ §7)
+      if (req.body.brand === 'LAB' && req.body.barcodes.length === 0) row.barcodes = [await nextInternalBarcode(tx)];
+      const [p] = await tx.insert(product).values(row).returning();
       await audit(tx, { actorType: 'staff', actorId: me.staff_id, action: 'product.create', objectType: 'product', objectId: p!.id, after: req.body });
       return (await productViews(tx, [p!], deps.clock.now()))[0]!;
     });
