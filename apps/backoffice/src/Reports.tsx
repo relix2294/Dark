@@ -48,6 +48,11 @@ export function Reports({ storeId }: { storeId: string }) {
               <div className="big">{r.avg_pick_sec != null ? `${Math.floor(r.avg_pick_sec / 60)}:${String(r.avg_pick_sec % 60).padStart(2, '0')}` : '—'}</div>
               <div className="muted">норматив 2:00</div>
             </Card>
+            <Card>
+              <div className="muted">Оценка клиентов</div>
+              <div className="big">{r.rating ? `${r.rating.avg.toFixed(1)} ★` : '—'}</div>
+              <div className="muted">{r.rating ? `оценок ${r.rating.count} · низких (≤ 3) ${r.rating.low}` : 'оценок пока нет'}</div>
+            </Card>
           </div>
           <div className="row" style={{ alignItems: 'flex-start', gap: 20 }}>
             <table className="table" style={{ flex: 1 }}>
