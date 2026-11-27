@@ -1,7 +1,7 @@
 import { index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { base, ts } from './_common.js';
-import { stationEnum } from './enums.js';
-import { store } from './refs.js';
+import { deviceAppEnum, stationEnum } from './enums.js';
+import { store, userStaff } from './refs.js';
 import { order, orderItem } from './orders.js';
 
 /**
@@ -121,4 +121,23 @@ export const notification = pgTable(
     error: text('error'),
   },
   (t) => [uniqueIndex('notification_dedupe_uq').on(t.dedupeKey), index('notification_customer_idx').on(t.customerId, t.createdAt), index('notification_status_idx').on(t.status)],
+);
+
+/**
+ * Связь устройств точки (ТЗ §10): терминал сборщика и экран кухни шлют пульс раз в 30 с.
+ * Молчит дольше 2 минут в рабочее время — тревога старшему смены, одна на эпизод (offline_alerted_at).
+ */
+export const devicePresence = pgTable(
+  'device_presence',
+  {
+    deviceId: text('device_id').primaryKey(),
+    storeId: uuid('store_id').notNull().references(() => store.id),
+    app: deviceAppEnum('app').notNull(),
+    staffId: uuid('staff_id').references(() => userStaff.id),
+    lastSeenAt: ts('last_seen_at').notNull(),
+    /** Штатный выход: устройство выключили, связь не ждём. */
+    signedOffAt: ts('signed_off_at'),
+    offlineAlertedAt: ts('offline_alerted_at'),
+  },
+  (t) => [index('device_presence_store_idx').on(t.storeId, t.lastSeenAt)],
 );

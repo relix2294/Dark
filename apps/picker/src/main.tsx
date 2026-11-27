@@ -12,7 +12,7 @@ const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, networkMode:
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={qc}>
-      <StaffAuthProvider app="picker" roles={['picker', 'shift_lead', 'manager']}>
+      <StaffAuthProvider app="picker" heartbeat="picker" roles={['picker', 'shift_lead', 'manager']}>
         <App />
       </StaffAuthProvider>
     </QueryClientProvider>

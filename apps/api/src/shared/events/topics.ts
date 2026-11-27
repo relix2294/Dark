@@ -19,5 +19,6 @@ export const TOPICS = [
   'courier.status_changed',
   'kds.item_late',
   'dispatch.no_courier',
+  'device.offline',
 ] as const;
 export type Topic = (typeof TOPICS)[number];

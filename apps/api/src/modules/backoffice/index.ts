@@ -3,6 +3,8 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
+  ConsoleDevicesView,
+  HeartbeatRequest,
   ConsoleAlertsQuery,
   ConsoleAlertsView,
   ConsoleCouriersView,
@@ -23,6 +25,8 @@ import { confirmDeliveredByLead, consoleCouriers, manualAssign, markReturned } f
 import { refund } from '../payments/index.js';
 export { registerReports } from './reports.js';
 import { storeAlerts } from './alerts.js';
+import { heartbeat, storeDevices } from './devices.js';
+export { detectOfflineDevices } from './devices.js';
 import { auditLog, parameter } from '../../shared/db/schema/index.js';
 import { audit as auditDb, type AuditEntry } from '../../shared/audit.js';
 import { requireStaff, requireStaffAny } from '../../shared/auth/index.js';
@@ -59,6 +63,16 @@ export async function registerBackoffice(app: FastifyInstance, deps: AppDeps) {
   r.get('/console/stores/:store_id/alerts', { schema: { tags, security: sec, params: ConsoleStoreParams, querystring: ConsoleAlertsQuery, response: { 200: ConsoleAlertsView } } }, async (req) => {
     requireStaff(req.principal, 'shift_lead.console', req.params.store_id);
     return { alerts: await storeAlerts(deps.db, req.params.store_id, req.query.hours) };
+  });
+  r.get('/console/stores/:store_id/devices', { schema: { tags, security: sec, params: ConsoleStoreParams, response: { 200: ConsoleDevicesView } } }, async (req) => {
+    requireStaff(req.principal, 'shift_lead.console', req.params.store_id);
+    return storeDevices(deps, req.params.store_id);
+  });
+  // пульс идемпотентен по смыслу (последнее время связи), ключ не нужен; раз в 30 с с каждого устройства
+  r.post('/staff/heartbeat', { config: { idempotency: false }, schema: { tags, security: sec, body: HeartbeatRequest } }, async (req, reply) => {
+    if (req.principal?.kind !== 'staff') throw new AppError('FORBIDDEN', 'Только для персонала');
+    await heartbeat(deps, req.principal, req.body);
+    return reply.status(204).send();
   });
   r.post('/console/stores/:store_id/orders/:id/assign', { schema: { tags, security: sec, params: ConsoleOrderParams, body: ManualAssignRequest, response: { 200: DeliveryTaskView } } }, async (req) => {
     const me = requireStaff(req.principal, 'dispatch.manual_assign', req.params.store_id);

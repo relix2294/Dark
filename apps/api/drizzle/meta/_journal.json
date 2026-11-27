@@ -50,6 +50,13 @@
       "when": 1795794083840,
       "tag": "0006_order_rating",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795803263298,
+      "tag": "0007_device_presence",
+      "breakpoints": true
     }
   ]
 }

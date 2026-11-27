@@ -124,3 +124,8 @@ export type ActorType = z.infer<typeof ActorType>;
 export const RATING_TAG_VALUES = ['late', 'missing_items', 'wrong_items', 'damaged', 'quality', 'courier'] as const;
 export const RatingTag = z.enum(RATING_TAG_VALUES);
 export type RatingTag = z.infer<typeof RatingTag>;
+
+/** Устройства точки под контролем связи (ТЗ §10: терминал или экран кухни не на связи). */
+export const DEVICE_APP_VALUES = ['picker', 'kds'] as const;
+export const DeviceApp = z.enum(DEVICE_APP_VALUES);
+export type DeviceApp = z.infer<typeof DeviceApp>;

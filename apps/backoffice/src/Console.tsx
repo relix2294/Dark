@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
-import { ConsoleAlertsView, ConsoleCouriersView, ConsoleOrdersView } from '@dark/contracts';
+import { ConsoleAlertsView, ConsoleCouriersView, ConsoleDevicesView, ConsoleOrdersView } from '@dark/contracts';
 import { BRAND_RU, Badge, Button, COURIER_STATUS_RU, Card, ErrorBanner, Field, MapView, ORDER_STATUS_RU, somoni, statusTone, time, useStaff, type MapMarker } from '@dark/ui';
 
 type Orders = z.infer<typeof ConsoleOrdersView>;
@@ -18,6 +18,7 @@ export function Console({ storeId, storeGeo }: { storeId: string; storeGeo: { la
   const orders = useQuery({ queryKey: ['console-orders', storeId], queryFn: () => api.get<Orders>(`/console/stores/${storeId}/orders`) });
   const couriers = useQuery({ queryKey: ['console-couriers', storeId], queryFn: () => api.get<Couriers>(`/console/stores/${storeId}/couriers`) });
   const feed = useQuery({ queryKey: ['console-alerts', storeId], queryFn: () => api.get<z.infer<typeof ConsoleAlertsView>>(`/console/stores/${storeId}/alerts?hours=12`) });
+  const devices = useQuery({ queryKey: ['console-devices', storeId], queryFn: () => api.get<z.infer<typeof ConsoleDevicesView>>(`/console/stores/${storeId}/devices`), refetchInterval: 30_000 });
   const [selected, setSelected] = useState<Order | null>(null);
   const refresh = () => void qc.invalidateQueries({ queryKey: ['console-orders', storeId] });
 
@@ -94,6 +95,19 @@ export function Console({ storeId, storeGeo }: { storeId: string; storeGeo: { la
             </Card>
           ))}
           {couriers.data && couriers.data.couriers.length === 0 && <div className="empty">Курьеров на точке нет</div>}
+          <h2>Устройства</h2>
+          {(devices.data?.devices ?? []).map((d) => (
+            <Card key={d.device_id} tone={d.online ? undefined : 'red'}>
+              <div className="row">
+                <b>{d.app === 'kds' ? 'Экран кухни' : 'Терминал сборщика'}</b>
+                <Badge tone={d.online ? 'green' : 'red'}>{d.online ? 'на связи' : 'нет связи'}</Badge>
+              </div>
+              <div className="muted">
+                {d.staff_name ?? '—'} · связь {time(d.last_seen_at)}
+              </div>
+            </Card>
+          ))}
+          {devices.data && devices.data.devices.length === 0 && <div className="empty">Терминалы и экраны кухни не подключались</div>}
         </div>
       </div>
       {selected && (

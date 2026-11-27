@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { StaffPrincipal } from '@dark/contracts';
+import type { DeviceApp, StaffPrincipal } from '@dark/contracts';
 import { ApiError, createApi, type Api } from './api.js';
 import { Button, Field, Screen } from './components.js';
 
@@ -17,8 +17,25 @@ function decode(token: string): StaffPrincipal | null {
   }
 }
 
-/** Провайдер API и сессии персонала: вход по телефону и PIN, токен в localStorage, выход по 401. */
-export function StaffAuthProvider({ app, children, roles }: { app: string; children: ReactNode; roles?: string[] }) {
+/** Постоянный id устройства (браузера терминала) — для контроля связи на пульте. */
+function deviceId() {
+  const k = 'dark.device.id';
+  try {
+    let id = localStorage.getItem(k);
+    if (!id) localStorage.setItem(k, (id = crypto.randomUUID()));
+    return id;
+  } catch {
+    return crypto.randomUUID();
+  }
+}
+
+const HEARTBEAT_MS = 30_000;
+
+/**
+ * Провайдер API и сессии персонала: вход по телефону и PIN, токен в localStorage, выход по 401.
+ * heartbeat — устройство точки (терминал, экран кухни): пульс раз в 30 с, при выходе — «прощание» (ТЗ §10).
+ */
+export function StaffAuthProvider({ app, children, roles, heartbeat }: { app: string; children: ReactNode; roles?: string[]; heartbeat?: DeviceApp }) {
   const [session, setSession] = useState<Session | null>(null);
   const api = useMemo<Api>(
     () =>
@@ -36,10 +53,20 @@ export function StaffAuthProvider({ app, children, roles }: { app: string; child
     if (t && p) setSession({ token: t, principal: p, expiresAt: '' });
     else api.token.set(null);
   }, [api]);
+  const loggedIn = !!session;
+  useEffect(() => {
+    if (!heartbeat || !loggedIn) return;
+    const send = () => void api.post('/staff/heartbeat', { device_id: deviceId(), app: heartbeat }).catch(() => undefined);
+    send();
+    const t = setInterval(send, HEARTBEAT_MS);
+    return () => clearInterval(t);
+  }, [api, heartbeat, loggedIn]);
   const logout = useCallback(() => {
+    // штатный выход: пульт не поднимет тревогу «не на связи»
+    if (heartbeat) void api.post('/staff/heartbeat', { device_id: deviceId(), app: heartbeat, bye: true }).catch(() => undefined);
     api.token.set(null);
     setSession(null);
-  }, [api]);
+  }, [api, heartbeat]);
 
   if (!session) return <StaffLogin api={api} roles={roles} onDone={(s) => setSession(s)} />;
   return <Ctx.Provider value={{ api, session, logout }}>{children}</Ctx.Provider>;

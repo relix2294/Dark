@@ -22,7 +22,7 @@ export const OWNERSHIP = {
   wms: ['cell', 'supply', 'supplyItem', 'stockLot', 'stockMove', 'stocktake', 'stocktakeLine', 'pickTask'],
   kds: ['kdsItem', 'stopList'],
   dispatch: ['courier', 'courierShift', 'courierPosition', 'deliveryTask', 'courierPlan'],
-  backoffice: ['parameter'],
+  backoffice: ['parameter', 'devicePresence'],
   notify: ['notification'],
   shared: ['outbox', 'idempotencyKey', 'auditLog'],
 };

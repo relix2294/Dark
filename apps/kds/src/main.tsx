@@ -10,7 +10,7 @@ const qc = new QueryClient({ defaultOptions: { queries: { refetchInterval: 30_00
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={qc}>
-      <StaffAuthProvider app="kds" roles={['cook', 'shift_lead', 'manager']}>
+      <StaffAuthProvider app="kds" heartbeat="kds" roles={['cook', 'shift_lead', 'manager']}>
         <App />
       </StaffAuthProvider>
     </QueryClientProvider>

@@ -11,6 +11,7 @@ import { CAPTURE_RETRY_DELAYS_SEC, executeCapture, nightlyReconcile, reconcilePe
 import { markPaymentFailed } from './modules/orders/index.js';
 import { planDailyStocktake } from './modules/wms/index.js';
 import { purgeAttempts } from './modules/customers/index.js';
+import { detectOfflineDevices } from './modules/backoffice/index.js';
 
 /**
  * Фоновые задачи на pg-boss (очередь в самом Postgres — без Redis).
@@ -51,6 +52,9 @@ export async function startWorkers(deps: AppDeps, log: FastifyBaseLogger) {
         log.error({ err, store_id: s.id }, 'dispatch: ошибка');
       }
     }
+    // устройства точки не на связи (ТЗ §10) — тот же минутный тик
+    const silent = await detectOfflineDevices(deps);
+    if (silent) log.warn({ devices: silent }, 'устройства не на связи');
   });
 
   await boss.work('payments.reconcile', async () => {

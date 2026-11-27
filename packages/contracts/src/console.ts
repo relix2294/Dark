@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Geo, Uuid } from './common.js';
-import { Brand, CourierStatus, OrderStatus, Transport } from './enums.js';
+import { Brand, CourierStatus, DeviceApp, OrderStatus, Transport } from './enums.js';
 import { Dirams } from './money.js';
 
 /** Пульт старшего смены (ТЗ §9). */
@@ -56,3 +56,14 @@ export const ConsoleAlertView = z.object({
 });
 export const ConsoleAlertsView = z.object({ alerts: z.array(ConsoleAlertView) });
 export const ConsoleAlertsQuery = z.object({ hours: z.coerce.number().int().min(1).max(72).default(12) });
+
+/** Пульс устройства раз в 30 с; bye — штатный выход (конец смены), тревоги не будет. */
+export const HeartbeatRequest = z.object({ device_id: z.string().min(8).max(64), app: DeviceApp, bye: z.boolean().optional() });
+export const ConsoleDeviceView = z.object({
+  device_id: z.string(),
+  app: DeviceApp,
+  staff_name: z.string().nullable(),
+  last_seen_at: z.iso.datetime(),
+  online: z.boolean(),
+});
+export const ConsoleDevicesView = z.object({ devices: z.array(ConsoleDeviceView) });
