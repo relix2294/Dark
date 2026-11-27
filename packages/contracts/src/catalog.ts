@@ -45,4 +45,6 @@ export const CatalogItem = z.object({
   /** Блюдо кухни Sor Box в каталоге Lablabu (ТЗ §8, этап 2): готовится на кухне, сборщик забирает со станции. */
   from_kitchen: z.boolean(),
 });
-export const CatalogResponse = z.object({ items: z.array(CatalogItem) });
+/** Категории с товарами на этой точке (без учёта фильтров) — для чипов витрины. */
+export const CatalogCategory = z.object({ id: Uuid, name: z.string(), count: z.number().int() });
+export const CatalogResponse = z.object({ items: z.array(CatalogItem), categories: z.array(CatalogCategory) });

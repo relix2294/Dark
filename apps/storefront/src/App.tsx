@@ -74,7 +74,16 @@ function Shop({ onLogout }: { onLogout: () => void }) {
     retry: false,
   });
   const storeId = resolve.data?.store_id;
-  const catalog = useQuery({ queryKey: ['catalog', storeId, brand], enabled: !!storeId, queryFn: () => api.get<Catalog>(`/catalog?store_id=${storeId}&brand=${brand}`), refetchInterval: 10_000 });
+  // поиск и категории (ТЗ §9): ввод уходит на сервер через 300 мс тишины
+  const [search, setSearch] = useState('');
+  const [q, setQ] = useState('');
+  const [category, setCategory] = useState<string | null>(null);
+  useEffect(() => {
+    const t = setTimeout(() => setQ(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+  const catalogUrl = `/catalog?store_id=${storeId}&brand=${brand}${category ? `&category=${category}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}`;
+  const catalog = useQuery({ queryKey: ['catalog', storeId, brand, category, q], enabled: !!storeId, queryFn: () => api.get<Catalog>(catalogUrl), refetchInterval: 10_000, placeholderData: (prev) => prev });
 
   const cartBody = useMemo(() => (storeId && address ? { brand, store_id: storeId, address_id: address.id, items: lines, ...(promo ? { promo_code: promo } : {}) } : null), [brand, storeId, address, lines, promo]);
   const cart = useQuery({ queryKey: ['cart', cartBody], enabled: !!cartBody && lines.length > 0, queryFn: () => api.put<Cart>('/cart', cartBody) });
@@ -130,7 +139,7 @@ function Shop({ onLogout }: { onLogout: () => void }) {
       title={
         <div className="tabs">
           {(['LAB', 'SOR'] as Brand[]).map((b) => (
-            <button key={b} className={`tab${brand === b ? ' tab-active' : ''}`} onClick={() => { setBrand(b); setLines([]); localStorage.setItem('dark.store.brand', b); }}>
+            <button key={b} className={`tab${brand === b ? ' tab-active' : ''}`} onClick={() => { setBrand(b); setLines([]); setCategory(null); setSearch(''); localStorage.setItem('dark.store.brand', b); }}>
               {BRAND_RU[b]}
             </button>
           ))}
@@ -158,6 +167,24 @@ function Shop({ onLogout }: { onLogout: () => void }) {
           {/* Сервер недоступен (ТЗ §11): не пустой каталог, а честное сообщение; оформление недоступно */}
           {[catalog.error, resolve.error, cart.error].some((e) => e instanceof ApiError && (e.code === 'NETWORK' || e.status >= 500)) && (
             <div className="banner banner-error">Временно не принимаем заказы — сервис недоступен. Попробуйте через пару минут.</div>
+          )}
+          {storeId && (
+            <>
+              <input className="input" type="search" placeholder="Поиск: название или штрихкод" value={search} onChange={(e) => setSearch(e.target.value)} />
+              {(catalog.data?.categories.length ?? 0) > 0 && (
+                <div className="chips">
+                  <button className={`chip${category === null ? ' chip-active' : ''}`} onClick={() => setCategory(null)}>
+                    Все
+                  </button>
+                  {catalog.data!.categories.map((c) => (
+                    <button key={c.id} className={`chip${category === c.id ? ' chip-active' : ''}`} onClick={() => setCategory(category === c.id ? null : c.id)}>
+                      {c.name} <span className="muted">{c.count}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {catalog.data && catalog.data.items.length === 0 && <div className="empty">{q ? `По запросу «${q}» ничего не нашли` : 'В этой категории пока пусто'}</div>}
+            </>
           )}
           {catalog.isLoading && <Spinner />}
           <div className="grid">

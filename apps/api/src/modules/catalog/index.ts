@@ -1,9 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { and, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { CatalogQuery, CatalogResponse, ResolveStoreQuery, ResolveStoreResponse, type Brand } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
-import { deliveryZone, dish, price, product, stockLot, stopList, store } from '../../shared/db/schema/index.js';
+import { category as categoryT, deliveryZone, dish, price, product, stockLot, stopList, store } from '../../shared/db/schema/index.js';
 import type { Tx } from '../../shared/db/client.js';
 import { AppError } from '../../shared/errors/index.js';
 import { pointInPolygon } from '../../shared/geo.js';
@@ -126,6 +126,13 @@ export async function registerCatalog(app: FastifyInstance, deps: AppDeps) {
     const [st] = await deps.db.select({ brands: store.brands }).from(store).where(eq(store.id, store_id));
     // каталог Lablabu на точке с кухней показывает и блюда Sor Box (ТЗ §8, этап 2)
     const withKitchen = brand === 'LAB' && !!st?.brands.includes('SOR');
+    const priceJoin = and(eq(price.productId, product.id), eq(price.storeId, store_id), lte(price.validFrom, now), or(isNull(price.validTo), gt(price.validTo, now)));
+    const scope = and(
+      withKitchen ? sql`(${product.brand} = 'LAB' or exists (select 1 from ${dish} where ${dish.productId} = ${product.id}))` : eq(product.brand, brand),
+      eq(product.isActive, true),
+    );
+    // поиск: русское и таджикское название, артикул, штрихкод; % и _ из ввода — буквально
+    const like = q?.trim() ? `%${q.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%` : null;
     const rows = await deps.db
       .select({
         product,
@@ -135,19 +142,26 @@ export async function registerCatalog(app: FastifyInstance, deps: AppDeps) {
           where ${stockLot.productId} = ${product.id} and ${stockLot.storeId} = ${store_id}), 0)::int`,
       })
       .from(product)
-      .innerJoin(
-        price,
-        and(eq(price.productId, product.id), eq(price.storeId, store_id), lte(price.validFrom, now), or(isNull(price.validTo), gt(price.validTo, now))),
-      )
+      .innerJoin(price, priceJoin)
       .where(
         and(
-          withKitchen ? sql`(${product.brand} = 'LAB' or exists (select 1 from ${dish} where ${dish.productId} = ${product.id}))` : eq(product.brand, brand),
-          eq(product.isActive, true),
+          scope,
           category ? eq(product.categoryId, category) : undefined,
-          q ? sql`${product.nameRu} ilike ${'%' + q + '%'}` : undefined,
+          like
+            ? sql`(${product.nameRu} ilike ${like} or ${product.nameTj} ilike ${like} or ${product.sku} ilike ${like} or ${q!.trim()} = any(${product.barcodes}))`
+            : undefined,
         ),
       )
+      .orderBy(asc(product.nameRu))
       .limit(500);
+    const cats = await deps.db
+      .select({ id: categoryT.id, name: categoryT.name, count: count() })
+      .from(product)
+      .innerJoin(price, priceJoin)
+      .innerJoin(categoryT, eq(categoryT.id, product.categoryId))
+      .where(scope)
+      .groupBy(categoryT.id, categoryT.name, categoryT.sort)
+      .orderBy(asc(categoryT.sort), asc(categoryT.name));
     const sorIds = rows.filter((r) => r.product.brand === 'SOR').map((r) => r.product.id);
     const stopped = await stoppedProductIds(deps, store_id, sorIds);
     const dishes = await getDishes(deps.db as unknown as Tx, sorIds);
@@ -169,6 +183,7 @@ export async function registerCatalog(app: FastifyInstance, deps: AppDeps) {
         modifiers: dishModifiersOrNull(dishes.get(r.product.id)?.modifiers),
         from_kitchen: brand === 'LAB' && r.product.brand === 'SOR',
       })),
+      categories: cats,
     };
   });
 }

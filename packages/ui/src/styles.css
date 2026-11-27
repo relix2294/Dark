@@ -80,6 +80,13 @@ h2 { font-size: 17px; }
 .tab { padding: 10px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); cursor: pointer; white-space: nowrap; font-weight: 600; }
 .tab-active { background: var(--primary); border-color: var(--primary); color: #fff; }
 
+/* чипы фильтров: горизонтальная прокрутка на телефоне, без переноса */
+.chips { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 6px; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
+.chip { padding: 8px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); cursor: pointer; white-space: nowrap; font-size: 14px; }
+.chip-active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.chip-active .muted { color: #fffc; }
+
 .numpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .numpad-key { min-height: 60px; font-size: 24px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--panel-2); color: var(--text); }
 .numpad-enter { grid-column: 1 / -1; background: var(--primary); border-color: var(--primary); color: #fff; }
