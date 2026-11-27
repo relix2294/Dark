@@ -13,15 +13,19 @@ export async function setupApp() {
     JWT_SECRET: 't'.repeat(32),
     LOG_LEVEL: 'warn',
   });
-  const clock = { now: () => new Date('2026-11-27T07:00:00Z') }; // 12:00 Душанбе, точка открыта
+  let current = new Date('2026-11-27T07:00:00Z'); // 12:00 Душанбе, точка открыта
+  const clock = { now: () => current };
   const deps = createDeps(config, { clock });
+  const setNow = (d: Date) => {
+    current = d;
+  };
   await migrate(deps.db, { migrationsFolder: new URL('../drizzle', import.meta.url).pathname });
   await deps.db.execute(sql`truncate table ${s.outbox}, ${s.idempotencyKey}, ${s.auditLog}, ${s.parameter}, ${s.stockMove}, ${s.stockLot}, ${s.cell},
     ${s.promoUse}, ${s.promo}, ${s.paymentOp}, ${s.payment}, ${s.orderStatusLog}, ${s.orderItem}, ${s.order}, ${s.address}, ${s.customer},
     ${s.courier}, ${s.userStaff}, ${s.dish}, ${s.price}, ${s.product}, ${s.category}, ${s.deliveryZone}, ${s.store} cascade`);
   const app = await buildApp(deps);
   await app.ready();
-  return { app, deps, close: async () => { await app.close(); await deps.close(); } };
+  return { app, deps, setNow, close: async () => { await app.close(); await deps.close(); } };
 }
 
 /** Минимальный мир: точка, зона LAB, два товара с ценами и партиями, клиент с адресом. */

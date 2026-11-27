@@ -92,9 +92,23 @@ POST /orders  (Idempotency-Key)
   неопубликованные пачкой с `FOR UPDATE SKIP LOCKED` (можно несколько инстансов), доставляет подписчикам, отмечает `published_at`,
   при ошибке увеличивает `attempts`.
 - **pg-boss** (очередь в Postgres, схема `pgboss`): `outbox.relay` (каждые 2 с), `dispatch.tick` (15 с), `payments.reconcile` (1 мин),
-  `housekeeping` (03:00). Redis не нужен.
+  `payments.capture` (повторы списания по расписанию ТЗ §5 п.7), `housekeeping` (03:00). Redis не нужен.
 - **Подписчики** живут в `modules/notify` — модули-источники не знают о пушах и SMS.
 - Мониторинг очереди outbox (ТЗ §10: > 100 событий или старше 1 мин) — метрика для следующей итерации.
+
+## 5a. Деньги после холда (ТЗ §5)
+
+- `delivered` → в транзакции заказа `payments.prepareCapture` (capture_pending + payment_op с ключом `{order}:capture:{seq}`), затем вне транзакции
+  `executeCapture` зовёт банк. Неуспех оставляет операцию pending под тем же ключом, воркер `payments.capture` повторяет 1, 5, 15 мин и далее ежечасно.
+- Отмена → `releaseHold`; отмена SOR после готовки и неявка → `captureAmountNow` на часть суммы (остаток холда снимает банк).
+- `refund` — только после списания, лимит по роли проверяет пульт. `reconcilePending` раз в минуту: hold_pending без ответа 60 с → failed, заказ → payment_failed, резерв снят.
+
+## 5b. Диспетчер (ТЗ §6)
+
+`dispatchStore(storeId)` в одной транзакции: истекшие предложения → expired; кандидаты — заказы без активного задания
+(LAB с picking, SOR с paid_hold) с `ready_eta` из pick_task / kds_item; свободные и возвращающиеся курьеры с ETA до точки по последней позиции;
+`planDispatch` (чистая функция) → задания `delivery_task` со снимком входа и правилом; тревоги `dispatch.no_courier` не чаще раза в 5 минут на заказ.
+Ручное назначение старшим смены пишет причину в задание и в журнал.
 
 ## 6. Realtime
 

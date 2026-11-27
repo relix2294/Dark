@@ -6,7 +6,7 @@ import { requireCustomer } from '../../shared/auth/index.js';
 import { cancelByCustomer, createOrder, getOrderView, quoteCart } from './service.js';
 import { openOrderStream } from './stream.js';
 
-export { transition } from './service.js';
+export { transition, cancelByStaff, markPaymentFailed, consoleOrders } from './service.js';
 export { orderMachine, ACTIVE_STATUSES } from './state-machine.js';
 export { getItemsWithProducts, markItemPicked, markItemMissing, addReplacementItem, recalcTotals, pendingItemIds } from './items.js';
 

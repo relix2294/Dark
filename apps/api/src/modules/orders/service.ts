@@ -11,6 +11,10 @@ import { getStore, isOpenAt, priceProducts, resolveZone } from '../catalog/index
 import { applyPromo, countUses, findPromo, recordUse } from '../promo/index.js';
 import { reserveForOrder, unreserve } from '../wms/index.js';
 import { enqueueOrder } from '../kds/index.js';
+import { releaseHold, captureAmountNow } from '../payments/index.js';
+import { courierForOrder } from '../dispatch/index.js';
+import type { StaffPrincipal } from '@dark/contracts';
+import { percentOf } from '../../shared/money.js';
 import { travelMinutes } from '../../shared/geo.js';
 import { priceCart } from './pricing.js';
 import { CUSTOMER_CANCELLABLE, orderMachine } from './state-machine.js';
@@ -205,14 +209,7 @@ export async function cancelByCustomer(deps: AppDeps, me: CustomerPrincipal, ord
     }
     const items = await tx.select({ id: orderItem.id }).from(orderItem).where(eq(orderItem.orderId, o.id));
     await unreserve(tx, items.map((i) => i.id));
-    const [pay] = await tx.select().from(payment).where(eq(payment.orderId, o.id));
-    if (pay?.status === 'held' && pay.providerRef) {
-      const key = `${o.id}:release:1`;
-      await tx.insert(paymentOp).values({ paymentId: pay.id, type: 'release', amountDirams: pay.holdDirams, idempotencyKey: key }).onConflictDoNothing();
-      const r = await deps.wallet.release({ providerRef: pay.providerRef, idempotencyKey: key });
-      await tx.update(payment).set({ status: r.ok ? 'released' : pay.status, lastError: r.ok ? null : r.message }).where(eq(payment.id, pay.id));
-      await tx.update(paymentOp).set({ status: r.ok ? 'ok' : 'failed' }).where(eq(paymentOp.idempotencyKey, key));
-    }
+    await releaseHold(tx, deps, o.id);
     await tx.update(order).set({ cancelReason: reason ?? 'клиент' }).where(eq(order.id, o.id));
     await transition(tx, o.id, o.status, 'cancelled', 'customer', me.customer_id, { reason });
   });
@@ -223,6 +220,8 @@ export async function getOrderView(deps: AppDeps, orderId: string, me: CustomerP
   const [o] = await deps.db.select().from(order).where(and(eq(order.id, orderId), eq(order.customerId, me.customer_id)));
   if (!o) throw notFound('Заказ', orderId);
   const items = await deps.db.select().from(orderItem).where(eq(orderItem.orderId, o.id));
+  const c = await deps.db.transaction((tx) => courierForOrder(tx, o.id));
+  const courierView = c && ['on_the_way', 'ready'].includes(o.status) ? { name: c.name, position: c.position } : null;
   return {
     id: o.id,
     number: o.number,
@@ -247,7 +246,7 @@ export async function getOrderView(deps: AppDeps, orderId: string, me: CustomerP
     promised_at: o.promisedAt?.toISOString() ?? null,
     ready_at: o.readyAt?.toISOString() ?? null,
     delivered_at: o.deliveredAt?.toISOString() ?? null,
-    courier: null, // TODO(dispatch): имя и позиция курьера из delivery_task
+    courier: courierView,
     created_at: o.createdAt.toISOString(),
   };
 }
@@ -269,4 +268,69 @@ async function withTimeout<T extends { ok: boolean }>(p: Promise<T>, ms: number)
   } finally {
     clearTimeout(t);
   }
+}
+
+/**
+ * Отмена оператором с причиной (ТЗ §3, §11): из paid_hold / picking / cooking / ready.
+ * LAB: резерв снят, холд снят. SOR после начала готовки: списывается SOR_CANCEL_FEE_PCT от блюд, блюда в списание.
+ */
+export async function cancelByStaff(deps: AppDeps, me: StaffPrincipal, orderId: string, reason: string) {
+  const r = await deps.db.transaction(async (tx) => {
+    const [o] = await tx.select().from(order).where(eq(order.id, orderId)).for('update');
+    if (!o) throw notFound('Заказ', orderId);
+    if (me.store_id && me.store_id !== o.storeId) throw new AppError('FORBIDDEN', 'Чужая точка');
+    orderMachine.assert(o.status, 'cancelled', 'staff');
+    const items = await tx.select({ id: orderItem.id }).from(orderItem).where(eq(orderItem.orderId, o.id));
+    await unreserve(tx, items.map((i) => i.id));
+    let fee = 0;
+    if (o.brand === 'SOR' && ['cooking', 'ready'].includes(o.status)) fee = percentOf(o.itemsTotalDirams, DEFAULT_PARAMS.SOR_CANCEL_FEE_PCT);
+    await tx.update(order).set({ cancelReason: reason, capturedDirams: fee }).where(eq(order.id, o.id));
+    await transition(tx, o.id, o.status, 'cancelled', 'staff', me.staff_id, { reason, fee_dirams: fee });
+    if (fee === 0) await releaseHold(tx, deps, o.id);
+    return { fee };
+  });
+  if (r.fee > 0) await captureAmountNow(deps, orderId, r.fee);
+  return { order_id: orderId, captured_dirams: r.fee };
+}
+
+/** Сверка признала холд несостоявшимся: заказ created → payment_failed, резерв снят. */
+export async function markPaymentFailed(deps: AppDeps, orderIds: string[]) {
+  for (const id of orderIds) {
+    await deps.db.transaction(async (tx) => {
+      const [o] = await tx.select().from(order).where(eq(order.id, id)).for('update');
+      if (!o || o.status !== 'created') return;
+      const items = await tx.select({ id: orderItem.id }).from(orderItem).where(eq(orderItem.orderId, id));
+      await unreserve(tx, items.map((i) => i.id));
+      await transition(tx, id, 'created', 'payment_failed', 'system', null, { reason: 'timeout' });
+    });
+  }
+}
+
+/** Заказы точки для пульта старшего смены. */
+export async function consoleOrders(deps: AppDeps, storeId: string) {
+  const now = deps.clock.now();
+  const rows = await deps.db
+    .select()
+    .from(order)
+    .where(and(eq(order.storeId, storeId), sql`${order.status} in ('created','paid_hold','picking','cooking','ready','on_the_way','returning')`))
+    .orderBy(order.createdAt);
+  const out = [];
+  for (const o of rows) {
+    const c = await deps.db.transaction((tx) => courierForOrder(tx, o.id));
+    const a = o.addressSnapshot as Record<string, unknown>;
+    out.push({
+      id: o.id,
+      number: o.number,
+      brand: o.brand,
+      status: o.status,
+      total_dirams: o.totalDirams,
+      created_at: o.createdAt.toISOString(),
+      promised_at: o.promisedAt?.toISOString() ?? null,
+      ready_at: o.readyAt?.toISOString() ?? null,
+      courier: c ? { courier_id: c.courier_id, name: c.name, task_status: c.task_status } : null,
+      waiting_min: o.status === 'ready' && !c && o.readyAt ? Math.round((now.getTime() - o.readyAt.getTime()) / 60_000) : null,
+      address_short: `${String(a['street'] ?? '')} ${String(a['house'] ?? '')}`.trim(),
+    });
+  }
+  return { orders: out };
 }

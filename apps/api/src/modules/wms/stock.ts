@@ -1,6 +1,6 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Tx } from '../../shared/db/client.js';
-import { cell, stockLot, stockMove } from '../../shared/db/schema/index.js';
+import { cell, orderItem, product, stockLot, stockMove } from '../../shared/db/schema/index.js';
 import { AppError } from '../../shared/errors/index.js';
 import { planReserve } from './reserve.js';
 
@@ -162,5 +162,26 @@ export async function consumeIngredients(tx: Tx, storeId: string, orderId: strin
     const take = lot ? Math.min(l.grams, lot.qty - lot.reservedQty) : 0;
     if (lot && take > 0) await tx.update(stockLot).set({ qty: sql`${stockLot.qty} - ${take}` }).where(eq(stockLot.id, lot.id));
     await tx.insert(stockMove).values({ storeId, productId: l.productId, lotId: take > 0 ? lot!.id : null, type: 'write_off', qty: l.grams, refType: 'order', refId: orderId, reason: 'recipe', actorId });
+  }
+}
+
+/**
+ * Возврат пакета на точку после неявки (ТЗ §11): собранный товар — обратно на склад новой партией без ячейки
+ * (кладовщик разместит), охлаждённое и замороженное — в списание.
+ */
+export async function returnPickedItems(tx: Tx, storeId: string, orderId: string, actorId: string) {
+  const picked = await tx
+    .select({ itemId: orderItem.id, productId: orderItem.productId, qty: orderItem.qtyPicked, tempZone: product.tempZone })
+    .from(orderItem)
+    .innerJoin(product, eq(product.id, orderItem.productId))
+    .where(and(eq(orderItem.orderId, orderId), eq(orderItem.status, 'picked')));
+  for (const it of picked) {
+    if (it.qty <= 0) continue;
+    if (it.tempZone === 'ambient') {
+      const [lot] = await tx.insert(stockLot).values({ storeId, productId: it.productId, qty: it.qty }).returning();
+      await tx.insert(stockMove).values({ storeId, productId: it.productId, lotId: lot!.id, type: 'return', qty: it.qty, refType: 'order', refId: orderId, actorId, reason: 'возврат после неявки' });
+    } else {
+      await tx.insert(stockMove).values({ storeId, productId: it.productId, lotId: null, type: 'write_off', qty: it.qty, refType: 'order', refId: orderId, actorId, reason: `возврат после неявки: ${it.tempZone}` });
+    }
   }
 }

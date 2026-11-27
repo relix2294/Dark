@@ -2,9 +2,24 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { and, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
+import {
+  ConsoleCouriersView,
+  ConsoleOrderParams,
+  ConsoleOrdersView,
+  ConsoleStoreParams,
+  DeliveryTaskView,
+  ManualAssignRequest,
+  RefundRequest,
+  RefundView,
+  ReturnedRequest,
+  StaffCancelRequest,
+} from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
+import { cancelByStaff, consoleOrders } from '../orders/index.js';
+import { consoleCouriers, manualAssign, markReturned } from '../dispatch/index.js';
+import { refund } from '../payments/index.js';
 import { auditLog, parameter } from '../../shared/db/schema/index.js';
-import { requireStaff } from '../../shared/auth/index.js';
+import { requireStaff, requireStaffAny } from '../../shared/auth/index.js';
 import { DEFAULT_PARAMS, resolveParams, type ParamKey } from '../../shared/params/index.js';
 
 /**
@@ -33,6 +48,44 @@ const ParamsBody = z.object({ key: z.enum(Object.keys(DEFAULT_PARAMS) as [ParamK
 
 export async function registerBackoffice(app: FastifyInstance, deps: AppDeps) {
   const r = app.withTypeProvider<ZodTypeProvider>();
+  const tags = ['console'];
+  const sec = [{ bearer: [] }];
+
+  // ---- пульт старшего смены (ТЗ §9) ----
+  r.get('/console/stores/:store_id/orders', { schema: { tags, security: sec, params: ConsoleStoreParams, response: { 200: ConsoleOrdersView } } }, async (req) => {
+    requireStaff(req.principal, 'shift_lead.console', req.params.store_id);
+    return consoleOrders(deps, req.params.store_id);
+  });
+  r.get('/console/stores/:store_id/couriers', { schema: { tags, security: sec, params: ConsoleStoreParams, response: { 200: ConsoleCouriersView } } }, async (req) => {
+    requireStaff(req.principal, 'shift_lead.console', req.params.store_id);
+    return consoleCouriers(deps, req.params.store_id);
+  });
+  r.post('/console/stores/:store_id/orders/:id/assign', { schema: { tags, security: sec, params: ConsoleOrderParams, body: ManualAssignRequest, response: { 200: DeliveryTaskView } } }, async (req) => {
+    const me = requireStaff(req.principal, 'dispatch.manual_assign', req.params.store_id);
+    const view = await manualAssign(deps, me, req.params.id, req.body.courier_id, req.body.reason);
+    await audit(deps, { actorType: 'staff', actorId: me.staff_id, action: 'dispatch.manual_assign', objectType: 'order', objectId: req.params.id, after: { courier_id: req.body.courier_id }, reason: req.body.reason, storeId: req.params.store_id });
+    return view;
+  });
+  r.post('/console/stores/:store_id/orders/:id/cancel', { schema: { tags, security: sec, params: ConsoleOrderParams, body: StaffCancelRequest } }, async (req) => {
+    const me = requireStaff(req.principal, 'orders.cancel_after_start', req.params.store_id);
+    const res = await cancelByStaff(deps, me, req.params.id, req.body.reason);
+    await audit(deps, { actorType: 'staff', actorId: me.staff_id, action: 'order.cancel', objectType: 'order', objectId: req.params.id, after: res, reason: req.body.reason, storeId: req.params.store_id });
+    return res;
+  });
+  r.post('/console/stores/:store_id/orders/:id/returned', { schema: { tags, security: sec, params: ConsoleOrderParams, body: ReturnedRequest } }, async (req) => {
+    const me = requireStaff(req.principal, 'shift_lead.console', req.params.store_id);
+    const res = await markReturned(deps, me, req.params.id, req.body.comment);
+    await audit(deps, { actorType: 'staff', actorId: me.staff_id, action: 'order.returned', objectType: 'order', objectId: req.params.id, after: res, storeId: req.params.store_id });
+    return res;
+  });
+  r.post('/console/stores/:store_id/orders/:id/refund', { schema: { tags, security: sec, params: ConsoleOrderParams, body: RefundRequest, response: { 200: RefundView } } }, async (req) => {
+    // до лимита — старший смены, управляющий, финансист; выше — только управляющий и финансист (ТЗ §9)
+    const perms = req.body.amount_dirams > DEFAULT_PARAMS.REFUND_LIMIT_DIRAMS ? (['payments.refund.over_limit'] as const) : (['payments.refund.under_limit'] as const);
+    const me = requireStaffAny(req.principal, [...perms], req.params.store_id);
+    const res = await refund(deps, req.params.id, req.body.amount_dirams, me.staff_id, req.body.reason);
+    await audit(deps, { actorType: 'staff', actorId: me.staff_id, action: 'payment.refund', objectType: 'order', objectId: req.params.id, after: res, reason: req.body.reason, storeId: req.params.store_id });
+    return res;
+  });
 
   r.get('/backoffice/stores/:store_id/params', { schema: { tags: ['backoffice'], security: [{ bearer: [] }], params: ParamsPath } }, async (req) => {
     requireStaff(req.principal, 'shift_lead.console', req.params.store_id);

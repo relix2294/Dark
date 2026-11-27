@@ -1,15 +1,21 @@
 import PgBoss from 'pg-boss';
 import type { FastifyBaseLogger } from 'fastify';
+import { eq, and, lt, sql } from 'drizzle-orm';
 import type { AppDeps } from './app.js';
 import { OutboxRelay } from './shared/events/outbox.js';
+import { courierPosition, idempotencyKey, store } from './shared/db/schema/index.js';
 import { registerNotifySubscribers } from './modules/notify/index.js';
+import { dispatchStore } from './modules/dispatch/index.js';
+import { CAPTURE_RETRY_DELAYS_SEC, executeCapture, reconcilePending } from './modules/payments/index.js';
+import { markPaymentFailed } from './modules/orders/index.js';
 
 /**
  * Фоновые задачи на pg-boss (очередь в самом Postgres — без Redis).
  * - outbox.relay: доставка событий подписчикам (каждые 2 с);
- * - payments.reconcile: платежи в *_pending старше 60 с (каждую минуту);
- * - dispatch.tick: диспетчер по каждой точке (каждые 15 с, ТЗ §6);
- * - housekeeping: чистка courier_position старше 30 дней, истёкших ключей идемпотентности (ночью).
+ * - dispatch.tick: диспетчер по каждой активной точке (каждые 15 с, ТЗ §6);
+ * - payments.reconcile: платежи в *_pending старше 60 с (каждую минуту, ТЗ §5);
+ * - payments.capture: повтор списания 1, 5, 15 мин, затем раз в час сутки, потом тревога (ТЗ §5 п.7);
+ * - housekeeping: courier_position старше 30 дней, ключи идемпотентности старше 7 дней (03:00 Душанбе).
  */
 export async function startWorkers(deps: AppDeps, log: FastifyBaseLogger) {
   const boss = new PgBoss({ connectionString: deps.config.DATABASE_URL, schema: 'pgboss' });
@@ -19,31 +25,57 @@ export async function startWorkers(deps: AppDeps, log: FastifyBaseLogger) {
   const relay = new OutboxRelay(deps.db, log);
   registerNotifySubscribers(relay, log);
 
-  for (const q of ['outbox.relay', 'payments.reconcile', 'dispatch.tick', 'housekeeping']) {
-    await boss.createQueue(q);
-  }
+  for (const q of ['outbox.relay', 'payments.reconcile', 'payments.capture', 'dispatch.tick', 'housekeeping']) await boss.createQueue(q);
 
   await boss.work('outbox.relay', async () => {
     let n = 0;
     do n = await relay.tick();
     while (n > 0);
   });
-  await boss.work('payments.reconcile', async () => {
-    // TODO(payments): опрос status() для платежей в *_pending старше PENDING_STALE_MS (ТЗ §5 п.4)
-  });
+
   await boss.work('dispatch.tick', async () => {
-    // TODO(dispatch): собрать DispatchInput по каждой активной точке → planDispatch → применить в транзакции
-  });
-  await boss.work('housekeeping', async () => {
-    // TODO: delete from courier_position where at < now() - interval '30 days'
+    const stores = await deps.db.select({ id: store.id }).from(store).where(eq(store.isActive, true));
+    for (const s of stores) {
+      try {
+        const r = await dispatchStore(deps, s.id);
+        if (r.assigned || r.alerts) log.info({ store_id: s.id, ...r }, 'dispatch');
+      } catch (err) {
+        log.error({ err, store_id: s.id }, 'dispatch: ошибка');
+      }
+    }
   });
 
-  await boss.schedule('outbox.relay', '* * * * *'); // минимум cron — минута; внутри tick выгребает всё
+  await boss.work('payments.reconcile', async () => {
+    const r = await reconcilePending(deps);
+    if (r.failedOrderIds.length) await markPaymentFailed(deps, r.failedOrderIds);
+    for (const paymentId of r.retryCaptureIds) await boss.send('payments.capture', { paymentId, attempt: 0 }, { singletonKey: paymentId, singletonSeconds: 60 });
+  });
+
+  await boss.work<{ paymentId: string; attempt: number }>('payments.capture', async ([job]) => {
+    if (!job) return;
+    const { paymentId, attempt } = job.data;
+    const r = await executeCapture(deps, paymentId);
+    if (r.ok) return;
+    const delay = CAPTURE_RETRY_DELAYS_SEC[attempt];
+    if (delay === undefined) {
+      log.error({ payment_id: paymentId }, 'capture не прошёл за сутки — тревога финансисту');
+      return;
+    }
+    await boss.send('payments.capture', { paymentId, attempt: attempt + 1 }, { startAfter: delay, singletonKey: paymentId, singletonSeconds: delay });
+  });
+
+  await boss.work('housekeeping', async () => {
+    const now = deps.clock.now();
+    await deps.db.delete(courierPosition).where(lt(courierPosition.at, new Date(now.getTime() - 30 * 86_400_000)));
+    await deps.db.delete(idempotencyKey).where(and(lt(idempotencyKey.createdAt, new Date(now.getTime() - 7 * 86_400_000)), sql`${idempotencyKey.completedAt} is not null`));
+  });
+
+  await boss.schedule('outbox.relay', '* * * * *');
   await boss.schedule('payments.reconcile', '* * * * *');
   await boss.schedule('dispatch.tick', '* * * * *');
   await boss.schedule('housekeeping', '0 3 * * *', {}, { tz: 'Asia/Dushanbe' });
 
-  // Частые тики без ожидания cron: outbox и диспетчер
+  // Частые тики без ожидания cron
   const fast = setInterval(() => {
     void boss.send('outbox.relay', {}, { singletonKey: 'relay', singletonSeconds: 2 });
     void boss.send('dispatch.tick', {}, { singletonKey: 'dispatch', singletonSeconds: 15 });
@@ -52,6 +84,8 @@ export async function startWorkers(deps: AppDeps, log: FastifyBaseLogger) {
   return {
     boss,
     relay,
+    /** Поставить повтор списания из обработчика доставки (если первый capture не прошёл). */
+    scheduleCapture: (paymentId: string) => boss.send('payments.capture', { paymentId, attempt: 0 }, { startAfter: CAPTURE_RETRY_DELAYS_SEC[0] ?? 60, singletonKey: paymentId }),
     stop: async () => {
       clearInterval(fast);
       await boss.stop({ graceful: true, timeout: 5000 });
