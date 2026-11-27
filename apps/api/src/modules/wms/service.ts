@@ -387,7 +387,7 @@ export async function writeOff(deps: AppDeps, me: StaffPrincipal, input: { lot_i
     if (!lot) throw notFound('Партия', input.lot_id);
     if (!canApprove) {
       // сборщик/повар только запрашивают (ТЗ §9) — запрос фиксируется событием для старшего смены
-      await publish(tx, { topic: 'stock.low', aggregateType: 'stock_lot', aggregateId: lot.id, payload: { write_off_requested: input, by: me.staff_id } });
+      await publish(tx, { topic: 'stock.write_off_requested', aggregateType: 'stock_lot', aggregateId: lot.id, payload: { ...input, by: me.staff_id, store_id: storeId } });
       return { status: 'requested' as const, lot: lotView(lot, null) };
     }
     await writeOffLot(tx, lot.id, input.qty, input.reason + (input.photo_url ? ` (фото: ${input.photo_url})` : ''), me.staff_id);

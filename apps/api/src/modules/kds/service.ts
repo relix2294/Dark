@@ -152,7 +152,7 @@ export async function done(deps: AppDeps, me: StaffPrincipal, itemId: string) {
     if (k.doneAt) throw new AppError('INVALID_TRANSITION', 'Блюдо уже готово');
     await tx.update(kdsItem).set({ doneAt: now }).where(eq(kdsItem.id, k.id));
     if (now > k.targetReadyAt)
-      await publish(tx, { topic: 'kds.item_late', aggregateType: 'kds_item', aggregateId: k.id, payload: { order_id: k.orderId, late_sec: Math.round((now.getTime() - k.targetReadyAt.getTime()) / 1000) } });
+      await publish(tx, { topic: 'kds.item_late', aggregateType: 'kds_item', aggregateId: k.id, payload: { order_id: k.orderId, store_id: k.storeId, late_sec: Math.round((now.getTime() - k.targetReadyAt.getTime()) / 1000) } });
     const [v] = await itemViews(tx, now, eq(kdsItem.id, k.id));
     return v!;
   });

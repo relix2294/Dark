@@ -3,6 +3,8 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
+  ConsoleAlertsQuery,
+  ConsoleAlertsView,
   ConsoleCouriersView,
   ConsoleOrderParams,
   ConsoleOrdersView,
@@ -20,6 +22,7 @@ import { cancelByStaff, consoleOrders } from '../orders/index.js';
 import { confirmDeliveredByLead, consoleCouriers, manualAssign, markReturned } from '../dispatch/index.js';
 import { refund } from '../payments/index.js';
 export { registerReports } from './reports.js';
+import { storeAlerts } from './alerts.js';
 import { auditLog, parameter } from '../../shared/db/schema/index.js';
 import { audit as auditDb, type AuditEntry } from '../../shared/audit.js';
 import { requireStaff, requireStaffAny } from '../../shared/auth/index.js';
@@ -52,6 +55,10 @@ export async function registerBackoffice(app: FastifyInstance, deps: AppDeps) {
   r.get('/console/stores/:store_id/couriers', { schema: { tags, security: sec, params: ConsoleStoreParams, response: { 200: ConsoleCouriersView } } }, async (req) => {
     requireStaff(req.principal, 'shift_lead.console', req.params.store_id);
     return consoleCouriers(deps, req.params.store_id);
+  });
+  r.get('/console/stores/:store_id/alerts', { schema: { tags, security: sec, params: ConsoleStoreParams, querystring: ConsoleAlertsQuery, response: { 200: ConsoleAlertsView } } }, async (req) => {
+    requireStaff(req.principal, 'shift_lead.console', req.params.store_id);
+    return { alerts: await storeAlerts(deps.db, req.params.store_id, req.query.hours) };
   });
   r.post('/console/stores/:store_id/orders/:id/assign', { schema: { tags, security: sec, params: ConsoleOrderParams, body: ManualAssignRequest, response: { 200: DeliveryTaskView } } }, async (req) => {
     const me = requireStaff(req.principal, 'dispatch.manual_assign', req.params.store_id);

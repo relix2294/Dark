@@ -11,6 +11,7 @@ export const TOPICS = [
   'payment.reconcile_mismatch',
   'stock.low',
   'stock.out',
+  'stock.write_off_requested',
   'task.offered',
   'task.accepted',
   'task.expired',

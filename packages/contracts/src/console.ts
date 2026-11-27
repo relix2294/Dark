@@ -42,3 +42,17 @@ export const RefundRequest = z.object({ amount_dirams: Dirams.min(1), reason: z.
 export const RefundView = z.object({ payment_status: z.string(), refunded_dirams: Dirams, captured_dirams: Dirams });
 
 export const LeadDeliveredRequest = z.object({ reason: z.string().min(1).max(200) });
+
+/** Лента тревог пульта (ТЗ §9–10): события, требующие внимания старшего смены. */
+export const ConsoleAlertLevel = z.enum(['critical', 'warning', 'info']);
+export const ConsoleAlertView = z.object({
+  id: Uuid,
+  topic: z.string(),
+  level: ConsoleAlertLevel,
+  text: z.string(),
+  order_id: Uuid.nullable(),
+  order_number: z.string().nullable(),
+  created_at: z.iso.datetime(),
+});
+export const ConsoleAlertsView = z.object({ alerts: z.array(ConsoleAlertView) });
+export const ConsoleAlertsQuery = z.object({ hours: z.coerce.number().int().min(1).max(72).default(12) });

@@ -25,6 +25,9 @@ export const DEFAULT_PARAMS = {
   NO_SHOW_WAIT_MS: 5 * 60_000,
   DELIVERY_GEOFENCE_M: 150,
   MIN_SHELF_LIFE_PCT: 20,
+  /** Порог «мало на складе» (ТЗ §10 stock.low): штучный товар — штук, весовой — граммов. */
+  LOW_STOCK_UNITS: 5,
+  LOW_STOCK_GRAMS: 2000,
   STOCKTAKE_TOLERANCE_PCT: 2,
   STATION_CAPACITY: { pizza: 4, grill: 6, cold: 8, pack: 10 } as Record<string, number>,
   LAST_ORDER_BEFORE_CLOSE_MS: { LAB: 20 * 60_000, SOR: 50 * 60_000 } as Record<string, number>,

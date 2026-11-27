@@ -2,6 +2,9 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Tx } from '../../shared/db/client.js';
 import { cell, orderItem, product, stockLot, stockMove } from '../../shared/db/schema/index.js';
 import { AppError } from '../../shared/errors/index.js';
+import { publish } from '../../shared/events/outbox.js';
+import { loadParams } from '../../shared/params/load.js';
+import { ref } from '../../shared/db/sql.js';
 import { planReserve } from './reserve.js';
 
 /**
@@ -45,6 +48,7 @@ export async function reserveForOrder(tx: Tx, storeId: string, orderId: string, 
     }
   }
   if (short.length) throw new AppError('OUT_OF_STOCK', 'Товар закончился во время оформления', { product_ids: short });
+  await checkStockLevel(tx, storeId, lines.map((l) => l.productId));
 }
 
 /** Остаток резерва заказа/позиции по партиям: reserve − unreserve − pick. */
@@ -96,6 +100,8 @@ export async function pickFromLot(tx: Tx, lotId: string, orderItemId: string, qt
     await tx.insert(stockMove).values({ storeId: lot.storeId, productId: lot.productId, lotId, type: 'pick', qty: releaseReserved, refType: 'order_item', refId: orderItemId });
   if (qty > releaseReserved)
     await tx.insert(stockMove).values({ storeId: lot.storeId, productId: lot.productId, lotId, type: 'pick', qty: qty - releaseReserved, refType: 'order_item_extra', refId: orderItemId });
+  // сборка весового сверх резерва уменьшает доступное
+  if (qty > releaseReserved) await checkStockLevel(tx, lot.storeId, [lot.productId]);
 }
 
 /** Приёмка: новая партия без ячейки. */
@@ -132,6 +138,7 @@ export async function writeOffLot(tx: Tx, lotId: string, qty: number, reason: st
   if (qty > lot.qty - lot.reservedQty) throw new AppError('OUT_OF_STOCK', 'Нельзя списать зарезервированное', { available: lot.qty - lot.reservedQty });
   await tx.update(stockLot).set({ qty: sql`${stockLot.qty} - ${qty}` }).where(eq(stockLot.id, lotId));
   await tx.insert(stockMove).values({ storeId: lot.storeId, productId: lot.productId, lotId, type: 'write_off', qty, reason, actorId });
+  await checkStockLevel(tx, lot.storeId, [lot.productId]);
 }
 
 /** Корректировка после пересчёта: до факта. Только управляющий (ТЗ §9). */
@@ -143,6 +150,7 @@ export async function adjustLot(tx: Tx, lotId: string, qtyFact: number, reason: 
   if (qtyFact < lot.reservedQty) throw new AppError('OUT_OF_STOCK', 'Факт меньше резерва', { reserved: lot.reservedQty });
   await tx.update(stockLot).set({ qty: qtyFact }).where(eq(stockLot.id, lotId));
   await tx.insert(stockMove).values({ storeId: lot.storeId, productId: lot.productId, lotId, type: 'adjust', qty: diff, reason, actorId });
+  if (diff < 0) await checkStockLevel(tx, lot.storeId, [lot.productId]);
 }
 
 /**
@@ -163,6 +171,7 @@ export async function consumeIngredients(tx: Tx, storeId: string, orderId: strin
     if (lot && take > 0) await tx.update(stockLot).set({ qty: sql`${stockLot.qty} - ${take}` }).where(eq(stockLot.id, lot.id));
     await tx.insert(stockMove).values({ storeId, productId: l.productId, lotId: take > 0 ? lot!.id : null, type: 'write_off', qty: l.grams, refType: 'order', refId: orderId, reason, actorId });
   }
+  await checkStockLevel(tx, storeId, lines.filter((l) => l.grams > 0).map((l) => l.productId));
 }
 
 /**
@@ -191,4 +200,33 @@ export async function surplusLot(tx: Tx, p: { storeId: string; productId: string
   const [lot] = await tx.insert(stockLot).values({ storeId: p.storeId, productId: p.productId, cellId: p.cellId, qty: p.qty }).returning();
   await tx.insert(stockMove).values({ storeId: p.storeId, productId: p.productId, lotId: lot!.id, type: 'adjust', qty: p.qty, reason: p.reason, actorId: p.actorId });
   return lot!;
+}
+
+/**
+ * Мало или нет на складе (ТЗ §10: stock.low, stock.out): после движения, уменьшившего доступный остаток.
+ * Доступно = остаток − резерв. Одно событие на товар и уровень в час — без шума при каждой сборке.
+ */
+export async function checkStockLevel(tx: Tx, storeId: string, productIds: string[]) {
+  if (productIds.length === 0) return;
+  const P = await loadParams(tx, storeId);
+  const rows = await tx
+    .select({
+      productId: product.id,
+      name: product.nameRu,
+      weighted: product.isWeighted,
+      available: sql<number>`coalesce((select sum(${stockLot.qty} - ${stockLot.reservedQty}) from ${stockLot}
+        where ${stockLot.productId} = ${ref(product.id)} and ${stockLot.storeId} = ${storeId}), 0)::int`,
+    })
+    .from(product)
+    .where(inArray(product.id, [...new Set(productIds)]));
+  for (const r of rows) {
+    const threshold = r.weighted ? P.LOW_STOCK_GRAMS : P.LOW_STOCK_UNITS;
+    const topic = r.available <= 0 ? 'stock.out' : r.available < threshold ? 'stock.low' : null;
+    if (!topic) continue;
+    const recent = await tx.execute<{ n: number }>(sql`
+      select count(*)::int n from outbox where topic = ${topic} and aggregate_id = ${r.productId}
+        and payload->>'store_id' = ${storeId} and created_at > now() - interval '1 hour'`);
+    if ((recent.rows[0]?.n ?? 0) > 0) continue;
+    await publish(tx, { topic, aggregateType: 'product', aggregateId: r.productId, payload: { store_id: storeId, name: r.name, available: r.available, unit: r.weighted ? 'г' : 'шт', threshold } });
+  }
 }
