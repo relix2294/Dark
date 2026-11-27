@@ -49,3 +49,16 @@ export const DeliveryTaskView = z.object({
   orders: z.array(TaskOrderView),
 });
 export type DeliveryTaskView = z.infer<typeof DeliveryTaskView>;
+
+/** Итоги смены курьера: время, поездки, доставки, пробег. Денег нет, пока не утверждена модель оплаты. */
+export const ShiftSummaryView = z.object({
+  shift_started_at: z.iso.datetime(),
+  shift_ended_at: z.iso.datetime().nullable(),
+  minutes: z.number().int(),
+  trips: z.number().int(),
+  delivered: z.number().int(),
+  on_time: z.number().int(),
+  returned: z.number().int(),
+  avg_delivery_min: z.number().int().nullable(),
+  km: z.number(),
+});

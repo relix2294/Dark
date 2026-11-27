@@ -14,8 +14,8 @@ import {
   NoShowRequest,
   PickupRequest,
   PositionBatch,
-  ShiftStartRequest,
-} from '@dark/contracts';
+  ShiftStartRequest, ShiftSummaryView } from '@dark/contracts';
+import { shiftSummary } from './shift-summary.js';
 import type { AppDeps } from '../../app.js';
 import { requireStaff } from '../../shared/auth/index.js';
 import * as svc from './service.js';
@@ -36,6 +36,7 @@ export async function registerDispatch(app: FastifyInstance, deps: AppDeps) {
     svc.shiftStart(deps, me(req.principal), req.body.transport),
   );
   r.post('/courier/shift/end', { schema: { tags, security: sec, response: { 200: CourierSelfView } } }, async (req) => svc.shiftEnd(deps, me(req.principal)));
+  r.get('/courier/shift/summary', { schema: { tags, security: sec, response: { 200: ShiftSummaryView.nullable() } } }, async (req) => shiftSummary(deps, me(req.principal)));
   r.post('/courier/shift/break', { schema: { tags, security: sec, response: { 200: CourierSelfView } } }, async (req) => svc.shiftBreak(deps, me(req.principal)));
 
   /** Телеметрия — без Idempotency-Key: пакеты точек дедуплицируются по времени события на клиенте и безвредны при повторе. */

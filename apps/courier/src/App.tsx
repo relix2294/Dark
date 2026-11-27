@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
-import type { CourierSelfView, DeliveryTaskView } from '@dark/contracts';
+import type { CourierSelfView, DeliveryTaskView, ShiftSummaryView } from '@dark/contracts';
 import { BRAND_RU, Badge, Button, COURIER_STATUS_RU, Card, ErrorBanner, Field, ORDER_STATUS_RU, Screen, Spinner, minutesLeft, time, useBarcodeScanner, useLive, useStaff } from '@dark/ui';
 
 type Me = z.infer<typeof CourierSelfView>;
@@ -63,9 +63,12 @@ export function App() {
     >
       <ErrorBanner error={me.error ?? shift.error} />
       {m?.status === 'offline' ? (
-        <Button big primary disabled={shift.isPending} onClick={() => shift.mutate('start')}>
-          Начать смену
-        </Button>
+        <>
+          <Button big primary disabled={shift.isPending} onClick={() => shift.mutate('start')}>
+            Начать смену
+          </Button>
+          <ShiftSummary />
+        </>
       ) : (
         <>
           {task.data ? <TaskCard task={task.data} geo={geo} onChange={refresh} /> : <div className="empty">Заданий нет. Ждём назначения…</div>}
@@ -77,6 +80,7 @@ export function App() {
               Закончить смену
             </Button>
           </div>
+          {!task.data && <ShiftSummary />}
           <div className="muted">
             GPS: {geo ? `${geo.coords.latitude.toFixed(5)}, ${geo.coords.longitude.toFixed(5)} ±${Math.round(geo.coords.accuracy)} м` : 'нет данных'} · очередь точек: {queue.current.length}
           </div>
@@ -177,5 +181,44 @@ function TaskCard({ task, geo, onChange }: { task: Task; geo: GeolocationPositio
         </Card>
       )}
     </>
+  );
+}
+
+const hm = (min: number) => `${Math.floor(min / 60)} ч ${String(min % 60).padStart(2, '0')} мин`;
+
+/** Итоги смены (ТЗ §9 «заработок за смену»): сумма в деньгах появится, когда утвердят модель оплаты курьеров. */
+function ShiftSummary() {
+  const { api } = useStaff();
+  const q = useQuery({ queryKey: ['shift-summary'], queryFn: () => api.get<z.infer<typeof ShiftSummaryView> | null>('/courier/shift/summary'), refetchInterval: 60_000 });
+  const s = q.data;
+  if (!s) return null;
+  return (
+    <Card>
+      <div className="row">
+        <b>{s.shift_ended_at ? 'Итоги прошлой смены' : 'Смена сейчас'}</b>
+        <span className="muted">
+          {time(s.shift_started_at)}–{s.shift_ended_at ? time(s.shift_ended_at) : 'сейчас'}
+        </span>
+      </div>
+      <div className="stats">
+        <div>
+          <div className="big">{s.delivered}</div>
+          <div className="muted">доставок</div>
+        </div>
+        <div>
+          <div className="big">{s.km.toFixed(1)}</div>
+          <div className="muted">км</div>
+        </div>
+        <div>
+          <div className="big">{hm(s.minutes)}</div>
+          <div className="muted">на смене</div>
+        </div>
+      </div>
+      <div className="muted">
+        поездок {s.trips} · вовремя {s.on_time} из {s.delivered}
+        {s.returned > 0 && ` · возвратов ${s.returned}`}
+        {s.avg_delivery_min != null && ` · в среднем ${s.avg_delivery_min} мин от точки до клиента`}
+      </div>
+    </Card>
   );
 }

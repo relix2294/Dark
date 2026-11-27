@@ -118,3 +118,7 @@ textarea.input { font: 14px/1.4 ui-monospace, monospace; }
 .map { width: 100%; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); background: #1c2230; position: relative; z-index: 0; isolation: isolate; }
 .map-label span { display: inline-block; padding: 2px 8px; border-radius: 999px; color: #fff; font: 600 12px/1.6 system-ui; white-space: nowrap; transform: translate(-50%, -50%); box-shadow: 0 2px 6px #0008; }
 .leaflet-container { font: inherit; }
+
+/* ряд крупных показателей (итоги смены) */
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; margin: 8px 0; }
+.stats .big { font-size: 22px; }
