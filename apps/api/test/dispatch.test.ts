@@ -151,13 +151,32 @@ describe('курьер и диспетчер (ТЗ §6, §11)', () => {
     const couriers = (await call('GET', `/api/v1/console/stores/${w.store.id}/couriers`, lead)).json();
     expect(couriers.couriers[0]).toMatchObject({ courier_id: courierId, status: 'free' });
 
-    const noReason = await call('POST', `/api/v1/console/stores/${w.store.id}/orders/${o.id}/assign`, lead, { courier_id: courierId, reason: '' });
+    // причина — из списка (ТЗ §6); «другое» без комментария не принимается
+    const noReason = await call('POST', `/api/v1/console/stores/${w.store.id}/orders/${o.id}/assign`, lead, { courier_id: courierId, reason: 'срочный клиент' });
     expect(noReason.statusCode).toBe(400);
-    const as = await call('POST', `/api/v1/console/stores/${w.store.id}/orders/${o.id}/assign`, lead, { courier_id: courierId, reason: 'срочный клиент' });
+    const otherBare = await call('POST', `/api/v1/console/stores/${w.store.id}/orders/${o.id}/assign`, lead, { courier_id: courierId, reason_code: 'other' });
+    expect(otherBare.statusCode).toBe(400);
+
+    // назначить → снять → заказ снова без курьера, курьер свободен, в журнале — кто и почему
+    const first = await call('POST', `/api/v1/console/stores/${w.store.id}/orders/${o.id}/assign`, lead, { courier_id: courierId, reason_code: 'courier_closer' });
+    expect(first.statusCode, first.body).toBe(200);
+    const un = await call('POST', `/api/v1/console/stores/${w.store.id}/orders/${o.id}/unassign`, lead, { reason_code: 'courier_unreachable', comment: 'не берёт трубку' });
+    expect(un.statusCode, un.body).toBe(200);
+    const [ft] = await ctx.deps.db.select().from(s.deliveryTask).where(eq(s.deliveryTask.id, first.json().task_id));
+    expect(ft).toMatchObject({ status: 'reassigned', overrideReason: 'курьер не отвечает: не берёт трубку' });
+    expect((await call('GET', `/api/v1/console/stores/${w.store.id}/couriers`, lead)).json().couriers[0].status).toBe('free');
+    // диспетчер не вернёт заказ тому же курьеру сразу после снятия
+    expect((await dispatchStore(ctx.deps, w.store.id)).assigned).toBe(0);
+    const unAudit = await ctx.deps.db.select().from(s.auditLog).where(and(eq(s.auditLog.action, 'dispatch.unassign'), eq(s.auditLog.objectId, o.id)));
+    expect(unAudit[0]).toMatchObject({ actorId: leadId, reason: 'курьер не отвечает: не берёт трубку', before: { courier_id: courierId } });
+    expect((await call('POST', `/api/v1/console/stores/${w.store.id}/orders/${o.id}/unassign`, lead, { reason_code: 'other', comment: 'x' })).json().error.code).toBe('INVALID_TRANSITION');
+    expect((await call('POST', `/api/v1/console/stores/${w.store.id}/orders/${o.id}/unassign`, picker, { reason_code: 'urgent_order' })).statusCode).toBe(403);
+
+    const as = await call('POST', `/api/v1/console/stores/${w.store.id}/orders/${o.id}/assign`, lead, { courier_id: courierId, reason_code: 'other', comment: 'срочный клиент' });
     expect(as.statusCode, as.body).toBe(200);
     expect(as.json()).toMatchObject({ status: 'accepted' });
     const [t] = await ctx.deps.db.select().from(s.deliveryTask).where(eq(s.deliveryTask.id, as.json().task_id));
-    expect(t).toMatchObject({ assignedBy: 'manual', overrideReason: 'срочный клиент' });
+    expect(t).toMatchObject({ assignedBy: 'manual', overrideReason: 'другое: срочный клиент' });
 
     // сборщик не может отменить после старта сборки, старший — может
     const pickerCancel = await call('POST', `/api/v1/console/stores/${w.store.id}/orders/${o.id}/cancel`, picker, { reason: 'x' });

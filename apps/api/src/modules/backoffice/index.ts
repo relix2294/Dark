@@ -14,6 +14,8 @@ import {
   LeadDeliveredRequest,
   DeliveryTaskView,
   ManualAssignRequest,
+  UnassignRequest,
+  DISPATCH_REASON_RU,
   RefundRequest,
   RefundView,
   ReturnedRequest,
@@ -21,7 +23,7 @@ import {
 } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
 import { cancelByStaff, consoleOrders } from '../orders/index.js';
-import { confirmDeliveredByLead, consoleCouriers, manualAssign, markReturned } from '../dispatch/index.js';
+import { confirmDeliveredByLead, consoleCouriers, manualAssign, markReturned, unassign } from '../dispatch/index.js';
 import { refund } from '../payments/index.js';
 export { registerReports } from './reports.js';
 import { storeAlerts } from './alerts.js';
@@ -42,6 +44,10 @@ export const getParams = (deps: AppDeps, storeId: string | null) => loadParams(d
 
 
 const audit = (deps: AppDeps, e: AuditEntry) => auditDb(deps.db, e);
+
+/** Причина из списка + комментарий → текст для задания и журнала. */
+const reasonText = (b: { reason_code: keyof typeof DISPATCH_REASON_RU; comment?: string | undefined }) =>
+  b.comment ? `${DISPATCH_REASON_RU[b.reason_code]}: ${b.comment}` : DISPATCH_REASON_RU[b.reason_code];
 
 const ParamsPath = z.object({ store_id: z.uuid() });
 const ParamsBody = z.object({ key: z.enum(Object.keys(DEFAULT_PARAMS) as [ParamKey, ...ParamKey[]]), value: z.unknown(), reason: z.string().min(1).max(200) });
@@ -76,9 +82,17 @@ export async function registerBackoffice(app: FastifyInstance, deps: AppDeps) {
   });
   r.post('/console/stores/:store_id/orders/:id/assign', { schema: { tags, security: sec, params: ConsoleOrderParams, body: ManualAssignRequest, response: { 200: DeliveryTaskView } } }, async (req) => {
     const me = requireStaff(req.principal, 'dispatch.manual_assign', req.params.store_id);
-    const view = await manualAssign(deps, me, req.params.id, req.body.courier_id, req.body.reason);
-    await audit(deps, { actorType: 'staff', actorId: me.staff_id, action: 'dispatch.manual_assign', objectType: 'order', objectId: req.params.id, after: { courier_id: req.body.courier_id }, reason: req.body.reason, storeId: req.params.store_id });
+    const reason = reasonText(req.body);
+    const view = await manualAssign(deps, me, req.params.id, req.body.courier_id, reason);
+    await audit(deps, { actorType: 'staff', actorId: me.staff_id, action: 'dispatch.manual_assign', objectType: 'order', objectId: req.params.id, after: { courier_id: req.body.courier_id, reason_code: req.body.reason_code }, reason, storeId: req.params.store_id });
     return view;
+  });
+  r.post('/console/stores/:store_id/orders/:id/unassign', { schema: { tags, security: sec, params: ConsoleOrderParams, body: UnassignRequest } }, async (req) => {
+    const me = requireStaff(req.principal, 'dispatch.manual_assign', req.params.store_id);
+    const reason = reasonText(req.body);
+    const r = await unassign(deps, me, req.params.id, reason);
+    await audit(deps, { actorType: 'staff', actorId: me.staff_id, action: 'dispatch.unassign', objectType: 'order', objectId: req.params.id, before: { courier_id: r.courier_id, task_id: r.task_id }, after: { courier_id: null, reason_code: req.body.reason_code }, reason, storeId: req.params.store_id });
+    return { ok: true };
   });
   r.post('/console/stores/:store_id/orders/:id/cancel', { schema: { tags, security: sec, params: ConsoleOrderParams, body: StaffCancelRequest } }, async (req) => {
     const me = requireStaff(req.principal, 'orders.cancel_after_start', req.params.store_id);

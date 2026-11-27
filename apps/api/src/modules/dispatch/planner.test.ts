@@ -111,4 +111,12 @@ describe('диспетчер: объединение поездок (этап 2)
     const r = planDispatch({ now, store, orders: [lab('L1', 1), { ...lab('L2', 0), address: near2 }], couriers: [courier('c1'), courier('c2')], labDemandRecent: true, params });
     expect(r.assignments.map((a) => a.rule)).toEqual(['lab_fifo', 'lab_fifo']);
   });
+
+  it('курьеру, с которого заказ сняли вручную, его не предлагаем — берём другого или ждём', () => {
+    const o = { ...lab('L1', 1), excludeCourierIds: ['c1'] };
+    let r = planDispatch({ now, store, orders: [o], couriers: [courier('c1'), courier('c2')], labDemandRecent: true, params });
+    expect(r.assignments[0]).toMatchObject({ orderId: 'L1', courierId: 'c2' });
+    r = planDispatch({ now, store, orders: [o], couriers: [courier('c1')], labDemandRecent: true, params });
+    expect(r.assignments).toHaveLength(0);
+  });
 });

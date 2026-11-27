@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Geo, Uuid } from './common.js';
-import { Brand, CourierStatus, DeviceApp, OrderStatus, Transport } from './enums.js';
+import { Brand, CourierStatus, DeviceApp, DispatchReason, OrderStatus, Transport } from './enums.js';
 import { Dirams } from './money.js';
 
 /** Пульт старшего смены (ТЗ §9). */
@@ -35,7 +35,13 @@ export const ConsoleCourierView = z.object({
 });
 export const ConsoleCouriersView = z.object({ couriers: z.array(ConsoleCourierView) });
 
-export const ManualAssignRequest = z.object({ courier_id: Uuid, reason: z.string().min(1).max(200) });
+const ReasonFields = { reason_code: DispatchReason, comment: z.string().trim().max(200).optional() };
+const commentForOther = (r: { reason_code: string; comment?: string | undefined }) => r.reason_code !== 'other' || !!r.comment;
+const otherNeedsComment = { message: 'Для причины «другое» нужен комментарий', path: ['comment'] };
+/** Назначить или переназначить курьера вручную: причина из списка (ТЗ §6). */
+export const ManualAssignRequest = z.object({ courier_id: Uuid, ...ReasonFields }).refine(commentForOther, otherNeedsComment);
+/** Снять заказ с курьера: заказ возвращается в очередь диспетчера (ТЗ §6). */
+export const UnassignRequest = z.object(ReasonFields).refine(commentForOther, otherNeedsComment);
 export const StaffCancelRequest = z.object({ reason: z.string().min(1).max(200) });
 export const ReturnedRequest = z.object({ comment: z.string().max(200).optional() });
 export const RefundRequest = z.object({ amount_dirams: Dirams.min(1), reason: z.string().min(1).max(200) });

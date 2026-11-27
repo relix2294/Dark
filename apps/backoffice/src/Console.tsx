@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
-import { ConsoleAlertsView, ConsoleCouriersView, ConsoleDevicesView, ConsoleOrdersView } from '@dark/contracts';
+import { ConsoleAlertsView, ConsoleCouriersView, ConsoleDevicesView, ConsoleOrdersView, DISPATCH_REASON_RU, DISPATCH_REASON_VALUES, type DispatchReason } from '@dark/contracts';
 import { BRAND_RU, Badge, Button, COURIER_STATUS_RU, Card, ErrorBanner, Field, MapView, ORDER_STATUS_RU, somoni, statusTone, time, useStaff, type MapMarker } from '@dark/ui';
 
 type Orders = z.infer<typeof ConsoleOrdersView>;
@@ -130,12 +130,17 @@ function OrderActions({ storeId, order, couriers, onClose }: { storeId: string; 
   const [courierId, setCourierId] = useState(couriers.find((c) => c.status === 'free')?.courier_id ?? '');
   const [reason, setReason] = useState('');
   const [amount, setAmount] = useState('');
+  // диспетчер: причина из списка (ТЗ §6), «другое» — с комментарием
+  const [code, setCode] = useState<DispatchReason | ''>('');
+  const dispatchBody = code ? { reason_code: code, ...(reason.trim() ? { comment: reason.trim() } : {}) } : null;
+  const dispatchOk = !!dispatchBody && (code !== 'other' || !!reason.trim());
   const act = useMutation({
     mutationFn: (p: { path: string; body: Record<string, unknown> }) => api.post(`/console/stores/${storeId}/orders/${order.id}/${p.path}`, p.body),
     onSuccess: onClose,
   });
   const canCancel = ['paid_hold', 'picking', 'cooking', 'ready'].includes(order.status);
   const canAssign = ['paid_hold', 'picking', 'cooking', 'ready'].includes(order.status);
+  const canUnassign = !!order.courier && ['offered', 'accepted', 'at_store'].includes(order.courier.task_status);
 
   return (
     <div className="card" style={{ position: 'fixed', right: 16, bottom: 16, width: 380, zIndex: 5, boxShadow: '0 10px 40px #0008' }}>
@@ -146,8 +151,20 @@ function OrderActions({ storeId, order, couriers, onClose }: { storeId: string; 
         <Button onClick={onClose}>✕</Button>
       </div>
       <ErrorBanner error={act.error} />
-      <Field label="Причина (обязательна для любого действия)">
-        <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="например: срочный клиент" />
+      {canAssign && (
+        <Field label="Причина для курьера (из списка)">
+          <select className="input" value={code} onChange={(e) => setCode(e.target.value as DispatchReason | '')}>
+            <option value="">— выбрать —</option>
+            {DISPATCH_REASON_VALUES.map((r) => (
+              <option key={r} value={r}>
+                {DISPATCH_REASON_RU[r]}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      <Field label={canAssign ? 'Комментарий (для отмены — причина)' : 'Причина (обязательна для любого действия)'}>
+        <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="например: клиент попросил" />
       </Field>
       {canAssign && (
         <>
@@ -161,9 +178,14 @@ function OrderActions({ storeId, order, couriers, onClose }: { storeId: string; 
               ))}
             </select>
           </Field>
-          <Button primary disabled={!courierId || !reason || act.isPending} onClick={() => act.mutate({ path: 'assign', body: { courier_id: courierId, reason } })}>
-            Назначить вручную
+          <Button primary disabled={!courierId || !dispatchOk || act.isPending} onClick={() => act.mutate({ path: 'assign', body: { courier_id: courierId, ...dispatchBody } })}>
+            {order.courier ? 'Переназначить' : 'Назначить вручную'}
           </Button>
+          {canUnassign && (
+            <Button disabled={!dispatchOk || act.isPending} onClick={() => act.mutate({ path: 'unassign', body: { ...dispatchBody } })}>
+              Снять с курьера {order.courier!.name}
+            </Button>
+          )}
         </>
       )}
       {canCancel && (

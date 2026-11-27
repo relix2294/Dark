@@ -129,3 +129,18 @@ export type RatingTag = z.infer<typeof RatingTag>;
 export const DEVICE_APP_VALUES = ['picker', 'kds'] as const;
 export const DeviceApp = z.enum(DEVICE_APP_VALUES);
 export type DeviceApp = z.infer<typeof DeviceApp>;
+
+/** Причина ручного вмешательства в диспетчер — из списка (ТЗ §6), «другое» — с комментарием. */
+export const DISPATCH_REASON_VALUES = ['urgent_order', 'courier_closer', 'courier_unreachable', 'courier_late', 'vehicle_issue', 'batching', 'customer_request', 'other'] as const;
+export const DispatchReason = z.enum(DISPATCH_REASON_VALUES);
+export type DispatchReason = z.infer<typeof DispatchReason>;
+export const DISPATCH_REASON_RU: Record<DispatchReason, string> = {
+  urgent_order: 'срочный заказ',
+  courier_closer: 'другой курьер ближе',
+  courier_unreachable: 'курьер не отвечает',
+  courier_late: 'курьер опаздывает на точку',
+  vehicle_issue: 'проблема с транспортом',
+  batching: 'объединение поездок',
+  customer_request: 'просьба клиента',
+  other: 'другое',
+};

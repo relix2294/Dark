@@ -17,6 +17,8 @@ export type PendingOrder = {
   address: Geo;
   /** Заказ уже готов (статус ready) — для контроля ожидания. */
   readyAt: Date | null;
+  /** Курьеры, с которых старший смены недавно снял этот заказ: им его снова не предлагаем. */
+  excludeCourierIds?: string[];
 };
 
 export type FreeCourier = {
@@ -106,6 +108,7 @@ export function planDispatch(input: DispatchInput): DispatchResult {
     let best: FreeCourier | undefined;
     let bestT = Infinity;
     for (const c of free) {
+      if (o.excludeCourierIds?.includes(c.id)) continue;
       const t = c.etaToStoreMin + travelMinutes(store, o.address, c.transport);
       if (t < bestT) {
         best = c;
@@ -122,6 +125,7 @@ export function planDispatch(input: DispatchInput): DispatchResult {
   const tryJoin = (o: PendingOrder): boolean => {
     let best: { courierId: string; seq: TripOrder[]; detourMin: number } | null = null;
     for (const [courierId, t] of trips) {
+      if (o.excludeCourierIds?.includes(courierId)) continue;
       const r = tryAddToTrip(store, t.seq, o, t.transport, now, params);
       if (r.ok && (!best || r.detourMin < best.detourMin)) best = { courierId, seq: r.seq, detourMin: r.detourMin };
     }

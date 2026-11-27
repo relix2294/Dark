@@ -351,11 +351,17 @@ export async function dispatchStore(deps: AppDeps, storeId: string): Promise<{ a
         const [k] = await tx.select({ t: sql<Date>`max(${kdsItem.targetReadyAt})` }).from(kdsItem).where(eq(kdsItem.orderId, o.id));
         readyEta = k?.t ? new Date(k.t) : new Date(now.getTime() + P.SOR_PROMISE_MS);
       }
+      // снят вручную с курьера (не отвечает, сломался транспорт…) — 15 минут этому курьеру его не даём
+      const removed = await tx
+        .select({ c: deliveryTask.courierId })
+        .from(deliveryTask)
+        .where(and(eq(deliveryTask.status, 'reassigned'), sql`${o.id} = any(${deliveryTask.orderIds})`, gt(deliveryTask.finishedAt, new Date(now.getTime() - UNASSIGN_COOLDOWN_MS))));
       return {
         id: o.id,
         brand: o.brand,
         createdAt: o.createdAt,
         readyEta,
+        ...(removed.length ? { excludeCourierIds: removed.map((r) => r.c) } : {}),
         promisedAt: o.promisedAt ?? new Date(now.getTime() + P.LAB_PROMISE_MS),
         address: o.addressSnapshot as { lat: number; lon: number },
         readyAt: o.readyAt,
@@ -466,6 +472,23 @@ export async function detachOrder(tx: Tx, orderId: string, reason: string) {
   else await setTaskStatus(tx, t, 'reassigned', 'shift_lead', { finishedAt: new Date(), overrideReason: reason });
   const [c] = await tx.select().from(courier).where(eq(courier.id, t.courierId)).for('update');
   if (c?.status === 'assigned') await setCourierStatus(tx, c, 'free', 'system');
+}
+
+/** Сколько заказ, снятый с курьера вручную, не предлагается тому же курьеру. */
+const UNASSIGN_COOLDOWN_MS = 15 * 60_000;
+
+/** Снять заказ с курьера (ТЗ §6): заказ возвращается в очередь диспетчера. Курьер в пути — только отмена/возврат. */
+export async function unassign(deps: AppDeps, me: StaffPrincipal, orderId: string, reason: string) {
+  return deps.db.transaction(async (tx) => {
+    const [o] = await tx.select().from(order).where(eq(order.id, orderId)).for('update');
+    if (!o) throw notFound('Заказ', orderId);
+    if (me.store_id && me.store_id !== o.storeId) throw new AppError('FORBIDDEN', 'Чужая точка');
+    const [t] = await tx.select().from(deliveryTask).where(and(inArray(deliveryTask.status, [...TASK_ACTIVE]), sql`${orderId} = any(${deliveryTask.orderIds})`));
+    if (!t) throw new AppError('INVALID_TRANSITION', 'Заказ не назначен курьеру');
+    if (!['offered', 'accepted', 'at_store'].includes(t.status)) throw new AppError('INVALID_TRANSITION', 'Курьер уже забрал заказ — снять нельзя');
+    await detachOrder(tx, orderId, reason);
+    return { courier_id: t.courierId, task_id: t.id };
+  });
 }
 
 /** Ручное назначение или переназначение старшим смены — причина обязательна, пишется в задание (ТЗ §6). */
