@@ -119,3 +119,8 @@ export type StaffRole = z.infer<typeof StaffRole>;
 export const ACTOR_TYPE_VALUES = ['customer', 'staff', 'system'] as const;
 export const ActorType = z.enum(ACTOR_TYPE_VALUES);
 export type ActorType = z.infer<typeof ActorType>;
+
+/** Что не понравилось в заказе (оценка после доставки, ТЗ §9 «Доставлен»: оценка). */
+export const RATING_TAG_VALUES = ['late', 'missing_items', 'wrong_items', 'damaged', 'quality', 'courier'] as const;
+export const RatingTag = z.enum(RATING_TAG_VALUES);
+export type RatingTag = z.infer<typeof RatingTag>;

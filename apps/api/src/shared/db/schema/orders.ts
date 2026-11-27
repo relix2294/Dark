@@ -1,4 +1,5 @@
-import { index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { check, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { base, ts } from './_common.js';
 import {
   actorTypeEnum,
@@ -9,6 +10,7 @@ import {
   paymentStatusEnum,
   promoAudienceEnum,
   promoTypeEnum,
+  ratingTagEnum,
   replacePolicyEnum,
 } from './enums.js';
 import { customer, product, store } from './refs.js';
@@ -124,4 +126,19 @@ export const promoUse = pgTable(
     amountDirams: integer('amount_dirams').notNull(),
   },
   (t) => [index('promo_use_promo_customer_idx').on(t.promoId, t.customerId)],
+);
+
+/** Оценка доставленного заказа клиентом (ТЗ §9): одна на заказ. */
+export const orderRating = pgTable(
+  'order_rating',
+  {
+    ...base,
+    orderId: uuid('order_id').notNull().unique().references(() => order.id),
+    customerId: uuid('customer_id').notNull().references(() => customer.id),
+    storeId: uuid('store_id').notNull().references(() => store.id),
+    score: integer('score').notNull(),
+    tags: ratingTagEnum('tags').array().notNull().default(sql`'{}'`),
+    comment: text('comment'),
+  },
+  (t) => [check('order_rating_score_chk', sql`${t.score} between 1 and 5`), index('order_rating_store_idx').on(t.storeId, t.createdAt)],
 );

@@ -3,6 +3,7 @@ export const TOPICS = [
   'order.created',
   'order.status_changed',
   'order.item_replaced',
+  'order.rated',
   'payment.held',
   'payment.captured',
   'payment.failed',

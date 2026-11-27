@@ -52,6 +52,11 @@ export async function registerReports(app: FastifyInstance, deps: AppDeps) {
         coalesce(sum(o.captured_dirams), 0)::int captured
       from "order" o where ${range} group by 1 order by 1`);
 
+    const [rating] = (
+      await db.execute<{ n: number; avg: number | null; low: number }>(sql`
+        select count(*)::int n, avg(r.score)::float avg, count(*) filter (where r.score <= 3)::int low
+        from order_rating r join "order" o on o.id = r.order_id where ${range}`)
+    ).rows;
     const totalPick = pickers.rows.reduce((a, p) => a + p.tasks, 0);
     return {
       orders_total: byStatus.rows.reduce((a, x) => a + x.n, 0),
@@ -69,6 +74,7 @@ export async function registerReports(app: FastifyInstance, deps: AppDeps) {
       write_offs: wo?.n ?? 0,
       avg_pick_sec: totalPick ? Math.round(pickers.rows.reduce((a, p) => a + p.avg_sec * p.tasks, 0) / totalPick) : null,
       pickers: pickers.rows.map((p) => ({ ...p, avg_sec: Math.round(p.avg_sec) })),
+      rating: rating && rating.n ? { count: rating.n, avg: Math.round((rating.avg ?? 0) * 100) / 100, low: rating.low } : null,
       daily: daily.rows.map((d) => ({ date: d.date, orders: d.orders, captured_dirams: d.captured })),
     };
   });

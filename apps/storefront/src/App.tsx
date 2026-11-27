@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
-import type { AddressListView, AddressView, Brand, CartResponse, CatalogResponse, DishModifiers, ModifierSelection, NotificationListView, OrderListView, OrderView, ResolveStoreResponse } from '@dark/contracts';
+import type { AddressListView, AddressView, Brand, CartResponse, CatalogResponse, DishModifiers, ModifierSelection, NotificationListView, OrderListView, OrderView, RatingTag, RepeatOrderView, ReplacePolicy, ResolveStoreResponse } from '@dark/contracts';
 import { ApiError, BRAND_RU, Badge, Button, Card, ErrorBanner, Field, MapView, ORDER_STATUS_RU, Screen, Spinner, createApi, somoni, statusTone, time } from '@dark/ui';
 
 type Address = z.infer<typeof AddressView>;
@@ -11,7 +11,7 @@ type Order = z.infer<typeof OrderView>;
 type Resolve = z.infer<typeof ResolveStoreResponse>;
 
 const api = createApi({ tokenKey: 'dark.store.token' });
-type Line = { product_id: string; qty: number; modifiers?: ModifierSelection };
+type Line = { product_id: string; qty: number; modifiers?: ModifierSelection | undefined; replace_policy?: ReplacePolicy };
 type CatalogItem = Catalog['items'][number];
 type Tab = 'shop' | 'orders' | 'notices';
 
@@ -105,7 +105,25 @@ function Shop({ onLogout }: { onLogout: () => void }) {
     });
   };
 
-  if (tracking) return <Tracking orderId={tracking} onBack={() => setTracking(null)} />;
+  // «Повторить заказ» (ТЗ §9): корзина из прошлого заказа по текущему меню; что не вышло — показываем
+  const [repeatNote, setRepeatNote] = useState<string | null>(null);
+  const repeat = useMutation({
+    mutationFn: (orderId: string) => api.get<z.infer<typeof RepeatOrderView>>(`/orders/${orderId}/repeat`),
+    onSuccess: (r) => {
+      setBrand(r.brand);
+      localStorage.setItem('dark.store.brand', r.brand);
+      setLines(r.items);
+      setRepeatNote(r.skipped.length ? `Не добавили: ${r.skipped.map((x) => `${x.name} — ${x.reason}`).join('; ')}` : null);
+      setTracking(null);
+      setTab('shop');
+    },
+  });
+  const dropUnavailable = () => {
+    const bad = new Set(cart.data?.unavailable_product_ids ?? []);
+    setLines((ls) => ls.filter((l) => !bad.has(l.product_id)));
+  };
+
+  if (tracking) return <Tracking orderId={tracking} onBack={() => setTracking(null)} onRepeat={(id) => repeat.mutate(id)} />;
 
   return (
     <Screen
@@ -123,7 +141,10 @@ function Shop({ onLogout }: { onLogout: () => void }) {
       {tab === 'notices' ? (
         <Notices data={notices.data} onOpen={setTracking} />
       ) : tab === 'orders' ? (
-        <History onOpen={setTracking} />
+        <>
+          <ErrorBanner error={repeat.error} />
+          <History onOpen={setTracking} onRepeat={(id) => repeat.mutate(id)} />
+        </>
       ) : (
         <>
           <AddressPicker brand={brand} addresses={addresses.data?.addresses ?? []} value={address} onChange={setAddress} />
@@ -173,6 +194,7 @@ function Shop({ onLogout }: { onLogout: () => void }) {
             />
           )}
           {cart.error && <ErrorBanner error={cart.error} />}
+          {repeatNote && lines.length > 0 && <div className="banner">{repeatNote}</div>}
           {lines.length > 0 && (
             <Card tone="yellow">
               <h2>Корзина</h2>
@@ -185,6 +207,7 @@ function Shop({ onLogout }: { onLogout: () => void }) {
                   <span>{somoni(l.line_total_dirams)}</span>
                 </div>
               ))}
+              {cart.data && cart.data.unavailable_product_ids.length > 0 && <Button onClick={dropUnavailable}>Убрать недоступное</Button>}
               <Field label="Промокод">
                 <input className="input" value={promo} onChange={(e) => setPromo(e.target.value.toUpperCase())} />
               </Field>
@@ -310,7 +333,7 @@ function AddressPicker({ brand, addresses, value, onChange }: { brand: Brand; ad
 }
 
 /** Статус заказа: SSE со сменой статуса и позицией курьера раз в 5 с (ТЗ §4). */
-function Tracking({ orderId, onBack }: { orderId: string; onBack: () => void }) {
+function Tracking({ orderId, onBack, onRepeat }: { orderId: string; onBack: () => void; onRepeat: (id: string) => void }) {
   const [order, setOrder] = useState<Order | null>(null);
   const [error, setError] = useState<unknown>(null);
   useEffect(() => {
@@ -359,6 +382,8 @@ function Tracking({ orderId, onBack }: { orderId: string; onBack: () => void }) 
         </div>
       </Card>
       <ErrorBanner error={error} />
+      {order.status === 'delivered' && (order.rating ? <RatingDone r={order.rating} /> : <RateOrder orderId={order.id} onDone={(rating) => setOrder({ ...order, rating })} />)}
+      {['delivered', 'cancelled', 'returned'].includes(order.status) && <Button onClick={() => onRepeat(order.id)}>Повторить заказ</Button>}
       {['created', 'paid_hold'].includes(order.status) && (
         <Button danger disabled={cancel.isPending} onClick={() => cancel.mutate()}>
           Отменить заказ
@@ -368,7 +393,7 @@ function Tracking({ orderId, onBack }: { orderId: string; onBack: () => void }) 
   );
 }
 
-function History({ onOpen }: { onOpen: (id: string) => void }) {
+function History({ onOpen, onRepeat }: { onOpen: (id: string) => void; onRepeat: (id: string) => void }) {
   const q = useQuery({ queryKey: ['orders'], queryFn: () => api.get<z.infer<typeof OrderListView>>('/orders'), refetchInterval: 10_000 });
   if (q.isLoading) return <Spinner />;
   return (
@@ -385,7 +410,14 @@ function History({ onOpen }: { onOpen: (id: string) => void }) {
           </div>
           <div className="muted">
             {time(o.created_at)} · {o.items.length} позиций · {somoni(o.captured_dirams ?? o.total_dirams)}
+            {o.rating && <span> · {'★'.repeat(o.rating.score)}</span>}
           </div>
+          {['delivered', 'cancelled', 'returned'].includes(o.status) && (
+            <div className="row" onClick={(e) => e.stopPropagation()}>
+              <Button onClick={() => onRepeat(o.id)}>Повторить</Button>
+              {o.status === 'delivered' && !o.rating && <span className="muted">Оцените заказ →</span>}
+            </div>
+          )}
         </Card>
       ))}
     </>
@@ -456,5 +488,64 @@ function Notices({ data, onOpen }: { data: z.infer<typeof NotificationListView> 
         </Card>
       ))}
     </>
+  );
+}
+
+const TAG_RU: Record<RatingTag, string> = { late: 'Опоздали', missing_items: 'Не всё привезли', wrong_items: 'Перепутали товар', damaged: 'Повреждено', quality: 'Качество', courier: 'Курьер' };
+
+/** Оценка после доставки (ТЗ §9): звёзды, при 1–4 — что не понравилось, комментарий. */
+function RateOrder({ orderId, onDone }: { orderId: string; onDone: (r: NonNullable<Order['rating']>) => void }) {
+  const [score, setScore] = useState(0);
+  const [tags, setTags] = useState<RatingTag[]>([]);
+  const [comment, setComment] = useState('');
+  const send = useMutation({
+    mutationFn: () => api.post<NonNullable<Order['rating']>>(`/orders/${orderId}/rating`, { score, tags: score < 5 ? tags : [], ...(comment.trim() ? { comment: comment.trim() } : {}) }, crypto.randomUUID()),
+    onSuccess: onDone,
+  });
+  return (
+    <Card>
+      <h2>Как всё прошло?</h2>
+      <div className="row" style={{ justifyContent: 'center', fontSize: 34 }}>
+        {[1, 2, 3, 4, 5].map((n) => (
+          <button key={n} aria-label={`${n} из 5`} onClick={() => setScore(n)} style={{ background: 'none', border: 0, cursor: 'pointer', color: n <= score ? '#ffc94d' : '#555', fontSize: 'inherit' }}>
+            ★
+          </button>
+        ))}
+      </div>
+      {score > 0 && score < 5 && (
+        <div className="row" style={{ flexWrap: 'wrap', justifyContent: 'flex-start', gap: 6 }}>
+          {(Object.keys(TAG_RU) as RatingTag[]).map((t) => (
+            <Button key={t} primary={tags.includes(t)} onClick={() => setTags((ts) => (ts.includes(t) ? ts.filter((x) => x !== t) : [...ts, t]))}>
+              {TAG_RU[t]}
+            </Button>
+          ))}
+        </div>
+      )}
+      {score > 0 && (
+        <>
+          <Field label="Комментарий">
+            <textarea className="input" maxLength={500} rows={2} value={comment} onChange={(e) => setComment(e.target.value)} />
+          </Field>
+          <ErrorBanner error={send.error} />
+          <Button primary disabled={send.isPending} onClick={() => send.mutate()}>
+            Отправить оценку
+          </Button>
+        </>
+      )}
+    </Card>
+  );
+}
+
+function RatingDone({ r }: { r: NonNullable<Order['rating']> }) {
+  return (
+    <Card>
+      <div>
+        Ваша оценка: <span style={{ color: '#ffc94d' }}>{'★'.repeat(r.score)}</span>
+        <span className="muted">{'★'.repeat(5 - r.score)}</span>
+      </div>
+      {r.tags.length > 0 && <div className="muted">{r.tags.map((t) => TAG_RU[t]).join(', ')}</div>}
+      {r.comment && <div className="muted">«{r.comment}»</div>}
+      <div className="muted">Спасибо! Старший смены видит каждую оценку.</div>
+    </Card>
   );
 }

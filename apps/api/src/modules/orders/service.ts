@@ -17,6 +17,7 @@ import type { StaffPrincipal } from '@dark/contracts';
 import { percentOf } from '../../shared/money.js';
 import { travelMinutes } from '../../shared/geo.js';
 import { priceCart } from './pricing.js';
+import { getRating } from './feedback.js';
 import { CUSTOMER_CANCELLABLE, orderMachine } from './state-machine.js';
 
 /**
@@ -298,6 +299,7 @@ export async function getOrderView(deps: AppDeps, orderId: string, me: CustomerP
     ready_at: o.readyAt?.toISOString() ?? null,
     delivered_at: o.deliveredAt?.toISOString() ?? null,
     courier: courierView,
+    rating: o.status === 'delivered' ? await getRating(deps, o.id) : null,
     created_at: o.createdAt.toISOString(),
   };
 }

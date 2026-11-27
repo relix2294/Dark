@@ -6,6 +6,7 @@ export const brandEnum = pgEnum('brand', C.BRAND_VALUES);
 export const orderStatusEnum = pgEnum('order_status', C.ORDER_STATUS_VALUES);
 export const orderItemStatusEnum = pgEnum('order_item_status', C.ORDER_ITEM_STATUS_VALUES);
 export const replacePolicyEnum = pgEnum('replace_policy', C.REPLACE_POLICY_VALUES);
+export const ratingTagEnum = pgEnum('rating_tag', C.RATING_TAG_VALUES);
 export const paymentStatusEnum = pgEnum('payment_status', C.PAYMENT_STATUS_VALUES);
 export const paymentOpTypeEnum = pgEnum('payment_op_type', C.PAYMENT_OP_TYPE_VALUES);
 export const deliveryTaskStatusEnum = pgEnum('delivery_task_status', C.DELIVERY_TASK_STATUS_VALUES);

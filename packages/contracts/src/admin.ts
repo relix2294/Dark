@@ -189,6 +189,8 @@ export const ReportSummary = z.object({
   write_offs: z.number().int(),
   avg_pick_sec: z.number().nullable(),
   pickers: z.array(z.object({ staff_id: Uuid, name: z.string(), tasks: z.number().int(), avg_sec: z.number() })),
+  /** Оценки клиентов за период: число, средняя, сколько ≤ 3. */
+  rating: z.object({ count: z.number().int(), avg: z.number(), low: z.number().int() }).nullable(),
   daily: z.array(z.object({ date: z.iso.date(), orders: z.number().int(), captured_dirams: Dirams })),
 });
 export const MoneyReport = z.object({

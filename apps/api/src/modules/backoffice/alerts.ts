@@ -10,12 +10,14 @@ export const ALERT_TOPICS = [
   'stock.write_off_requested',
   'payment.failed',
   'payment.hold_expiring',
+  'order.rated',
 ] as const;
 type AlertTopic = (typeof ALERT_TOPICS)[number];
 type Level = 'critical' | 'warning' | 'info';
 
 type Row = { id: string; topic: AlertTopic; aggregate_id: string; payload: Record<string, unknown>; created_at: Date; order_id: string | null; order_number: string | null };
 
+const TAG_RU: Record<string, string> = { late: 'опоздание', missing_items: 'не всё привезли', wrong_items: 'перепутали', damaged: 'повреждено', quality: 'качество', courier: 'курьер' };
 const n = (v: unknown) => (typeof v === 'number' ? v : Number(v ?? 0));
 const hhmm = (iso: unknown) =>
   new Date(String(iso)).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Dushanbe' });
@@ -36,6 +38,10 @@ export function describeAlert(topic: AlertTopic, p: Record<string, unknown>, ord
       return { level: 'info', text: `Запрос на списание: ${n(p.qty)} — ${String(p.reason ?? '')}`.trim() };
     case 'payment.failed':
       return { level: 'critical', text: `${ord}: оплата не прошла${p.reason ? ` (${String(p.reason)})` : ''}` };
+    case 'order.rated': {
+      const tags = Array.isArray(p.tags) && p.tags.length ? ` (${p.tags.map((t) => TAG_RU[String(t)] ?? String(t)).join(', ')})` : '';
+      return { level: n(p.score) <= 2 ? 'critical' : 'warning', text: `${ord}: оценка ${n(p.score)} из 5${tags}${p.comment ? ` — «${String(p.comment)}»` : ''}` };
+    }
     case 'payment.hold_expiring':
       return { level: 'warning', text: `${ord}: блокировка оплаты истекает в ${hhmm(p.expires_at)}` };
   }
@@ -54,6 +60,7 @@ export async function storeAlerts(db: Db, storeId: string, hours: number, limit 
     where e.topic in (${topics})
       and e.created_at > now() - make_interval(hours => ${hours})
       and coalesce(e.payload->>'store_id', o.store_id::text) = ${storeId}
+      and (e.topic <> 'order.rated' or (e.payload->>'score')::int <= 3)
     order by e.created_at desc
     limit ${limit}`);
   return res.rows.map((r) => {

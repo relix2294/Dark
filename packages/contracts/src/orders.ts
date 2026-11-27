@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Brand, OrderItemStatus, OrderStatus, ReplacePolicy } from './enums.js';
+import { Brand, OrderItemStatus, OrderStatus, RATING_TAG_VALUES, RatingTag, ReplacePolicy } from './enums.js';
 import { Dirams, Qty } from './money.js';
 import { Geo, Uuid } from './common.js';
 import { ModifierSelection, ModifierSnapshot } from './modifiers.js';
@@ -74,6 +74,9 @@ export const CourierView = z.object({
   position: Geo.nullable(),
 });
 
+/** Оценка заказа клиентом (см. RateOrderRequest). */
+export const OrderRatingView = z.object({ score: z.number().int(), tags: z.array(RatingTag), comment: z.string().nullable(), created_at: z.iso.datetime() });
+
 export const OrderView = z.object({
   id: Uuid,
   number: z.string(),
@@ -90,6 +93,7 @@ export const OrderView = z.object({
   ready_at: z.iso.datetime().nullable(),
   delivered_at: z.iso.datetime().nullable(),
   courier: CourierView.nullable(),
+  rating: OrderRatingView.nullable(),
   created_at: z.iso.datetime(),
 });
 export type OrderView = z.infer<typeof OrderView>;
@@ -124,3 +128,18 @@ export const NotificationView = z.object({
 });
 export const NotificationListView = z.object({ notifications: z.array(NotificationView), unread: z.number().int() });
 export const NotificationReadRequest = z.object({ ids: z.array(Uuid).min(1).max(100) });
+
+/** Оценка доставленного заказа: 1–5, что не понравилось, комментарий. Одна на заказ. */
+export const RateOrderRequest = z.object({
+  score: z.number().int().min(1).max(5),
+  tags: z.array(RatingTag).max(RATING_TAG_VALUES.length).default([]),
+  comment: z.string().trim().max(500).optional(),
+});
+
+/** «Повторить заказ» (ТЗ §9): позиции прошлого заказа как корзина по текущему меню; что не получилось — в skipped. */
+export const RepeatOrderView = z.object({
+  brand: Brand,
+  store_id: Uuid,
+  items: z.array(CartItemInput),
+  skipped: z.array(z.object({ product_id: Uuid, name: z.string(), reason: z.string() })),
+});
