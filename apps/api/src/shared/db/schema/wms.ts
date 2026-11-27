@@ -87,3 +87,19 @@ export const stocktakeLine = pgTable('stocktake_line', {
   countedBy: text('counted_by'),
   recountRequired: boolean('recount_required').notNull().default(false),
 });
+
+/** Задание на сборку: заказ, взятый сборщиком. Ярлык пакета печатается при завершении (ТЗ §7). */
+export const pickTask = pgTable(
+  'pick_task',
+  {
+    ...base,
+    orderId: uuid('order_id').notNull().unique(),
+    storeId: uuid('store_id').notNull().references(() => store.id),
+    pickerId: uuid('picker_id').notNull(),
+    status: text('status').notNull().default('open'),
+    startedAt: ts('started_at').notNull().defaultNow(),
+    completedAt: ts('completed_at'),
+    labelBarcode: text('label_barcode'),
+  },
+  (t) => [index('pick_task_picker_status_idx').on(t.pickerId, t.status)],
+);

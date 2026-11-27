@@ -83,6 +83,15 @@ export function requireStaff(p: Principal | undefined, perm: Permission, storeId
   return p;
 }
 
+/** Любое из прав подходит (например, запрос списания или его утверждение). */
+export function requireStaffAny(p: Principal | undefined, perms: Permission[], storeId?: string) {
+  if (!p) throw new AppError('UNAUTHORIZED', 'Требуется вход');
+  if (p.kind !== 'staff') throw forbidden('Только для персонала');
+  if (!perms.some((perm) => hasPermission(p.role, perm))) throw forbidden(`Роль ${p.role} не имеет прав ${perms.join(' / ')}`);
+  if (storeId && p.store_id && p.store_id !== storeId) throw forbidden('Чужая точка');
+  return p;
+}
+
 export function requireCustomer(p: Principal | undefined) {
   if (!p) throw new AppError('UNAUTHORIZED', 'Требуется вход');
   if (p.kind !== 'customer') throw forbidden('Только для клиента');

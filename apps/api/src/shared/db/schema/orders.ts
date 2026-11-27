@@ -51,6 +51,8 @@ export const orderItem = pgTable(
     replacePolicy: replacePolicyEnum('replace_policy').notNull().default('call'),
     replacedByItemId: uuid('replaced_by_item_id'),
     modifiers: jsonb('modifiers').$type<Record<string, unknown>>(),
+    /** Почему позиция missing/replaced и какое решение принято (call / auto / remove). */
+    missingMeta: jsonb('missing_meta').$type<Record<string, unknown>>(),
   },
   (t) => [index('order_item_order_idx').on(t.orderId)],
 );

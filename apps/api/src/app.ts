@@ -24,6 +24,7 @@ import { registerCatalog } from './modules/catalog/index.js';
 import { registerOrders } from './modules/orders/index.js';
 import { registerCustomers } from './modules/customers/index.js';
 import { registerBackoffice } from './modules/backoffice/index.js';
+import { registerWms } from './modules/wms/index.js';
 
 /** Зависимости, которые модули получают извне. Модули не создают их сами. */
 export type AppDeps = {
@@ -100,6 +101,7 @@ export async function buildApp(deps: AppDeps) {
       await registerCustomers(api, deps);
       await registerCatalog(api, deps);
       await registerOrders(api, deps);
+      await registerWms(api, deps);
       await registerBackoffice(api, deps);
     },
     { prefix: '/api/v1' },

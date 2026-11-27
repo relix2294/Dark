@@ -15,6 +15,13 @@
       "when": 1795773923111,
       "tag": "0001_invariants",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795781181092,
+      "tag": "0002_wms_pick_task",
+      "breakpoints": true
     }
   ]
 }

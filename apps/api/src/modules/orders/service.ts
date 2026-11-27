@@ -2,14 +2,14 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { Brand, CartResponse, CreateOrderRequest, CustomerPrincipal, OrderStatus, OrderView } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
 import type { Tx } from '../../shared/db/client.js';
-import { address, customer, order, orderItem, orderStatusLog, payment, paymentOp, stockLot, stockMove } from '../../shared/db/schema/index.js';
+import { address, customer, order, orderItem, orderStatusLog, payment, paymentOp } from '../../shared/db/schema/index.js';
 import { AppError, notFound } from '../../shared/errors/index.js';
 import { publish } from '../../shared/events/outbox.js';
 import { holdAmount } from '../../shared/money.js';
 import { DEFAULT_PARAMS } from '../../shared/params/index.js';
 import { getStore, isOpenAt, priceProducts, resolveZone } from '../catalog/index.js';
 import { applyPromo, countUses, findPromo, recordUse } from '../promo/index.js';
-import { planReserve } from '../wms/index.js';
+import { reserveForOrder, unreserve } from '../wms/index.js';
 import { priceCart } from './pricing.js';
 import { CUSTOMER_CANCELLABLE, orderMachine } from './state-machine.js';
 
@@ -126,7 +126,8 @@ export async function createOrder(deps: AppDeps, me: CustomerPrincipal, input: C
     if (q.promoRule) await recordUse(tx, q.promoRule, me.customer_id, o!.id, q.discount);
     // Резерв с блокировкой строк партий ДО холда: второй покупатель последней единицы получает OUT_OF_STOCK,
     // деньги не трогаются (ТЗ §11). При отказе банка резерв снимается в tx2.
-    if (input.brand === 'LAB') await reserveItems(tx, deps, q.store.id, o!.id, items, params.MIN_SHELF_LIFE_PCT);
+    if (input.brand === 'LAB')
+      await reserveForOrder(tx, q.store.id, o!.id, items.map((i) => ({ orderItemId: i.id, productId: i.productId, qty: i.qtyOrdered })), now, params.MIN_SHELF_LIFE_PCT);
 
     const hasWeighted = input.items.some((i) => q.products.get(i.product_id)?.isWeighted);
     const hold = holdAmount(q.cart.total_dirams, input.brand === 'LAB' && hasWeighted, params.HOLD_BUFFER_PCT);
@@ -156,7 +157,7 @@ export async function createOrder(deps: AppDeps, me: CustomerPrincipal, input: C
     } else {
       await tx.update(payment).set({ status: 'failed', lastError: res.message }).where(eq(payment.id, created.pay.id));
       await tx.update(paymentOp).set({ status: 'failed' }).where(eq(paymentOp.idempotencyKey, created.idemKey));
-      await unreserveAll(tx, created.o.id);
+      await unreserve(tx, created.items.map((i) => i.id));
       await transition(tx, created.o.id, 'created', 'payment_failed', 'system', null, { reason: res.reason });
       await publish(tx, { topic: 'payment.failed', aggregateType: 'payment', aggregateId: created.pay.id, payload: { order_id: created.o.id, reason: res.reason } });
     }
@@ -166,41 +167,6 @@ export async function createOrder(deps: AppDeps, me: CustomerPrincipal, input: C
     throw new AppError('PAYMENT_DECLINED', 'Оплата отклонена', { order_id: created.o.id, reason: res.reason });
   }
   return getOrderView(deps, created.o.id, me);
-}
-
-/** Резерв FEFO с блокировкой строк партий: второй покупатель последней единицы получает OUT_OF_STOCK (ТЗ §11). */
-async function reserveItems(
-  tx: Tx,
-  deps: AppDeps,
-  storeId: string,
-  orderId: string,
-  items: { id: string; productId: string; qtyOrdered: number }[],
-  minShelfLifePct: number,
-) {
-  const now = deps.clock.now();
-  const short: string[] = [];
-  for (const it of items) {
-    const lots = await tx
-      .select()
-      .from(stockLot)
-      .where(and(eq(stockLot.storeId, storeId), eq(stockLot.productId, it.productId), sql`${stockLot.qty} > ${stockLot.reservedQty}`))
-      .for('update');
-    const { plan, shortage } = planReserve(
-      lots.map((l) => ({ id: l.id, qty: l.qty, reservedQty: l.reservedQty, expiresAt: l.expiresAt, receivedAt: l.createdAt, shelfLifeDays: null })),
-      it.qtyOrdered,
-      now,
-      minShelfLifePct,
-    );
-    if (shortage > 0) {
-      short.push(it.productId);
-      continue;
-    }
-    for (const r of plan) {
-      await tx.update(stockLot).set({ reservedQty: sql`${stockLot.reservedQty} + ${r.qty}` }).where(eq(stockLot.id, r.lotId));
-      await tx.insert(stockMove).values({ storeId, productId: it.productId, lotId: r.lotId, type: 'reserve', qty: r.qty, refType: 'order', refId: orderId });
-    }
-  }
-  if (short.length) throw new AppError('OUT_OF_STOCK', 'Товар закончился во время оформления', { product_ids: short });
 }
 
 export async function transition(
@@ -231,7 +197,8 @@ export async function cancelByCustomer(deps: AppDeps, me: CustomerPrincipal, ord
       orderMachine.assert(o.status, 'cancelled', 'customer');
       throw new AppError('FORBIDDEN', 'Отмена после начала сборки — только оператор', { status: o.status });
     }
-    await unreserveAll(tx, o.id);
+    const items = await tx.select({ id: orderItem.id }).from(orderItem).where(eq(orderItem.orderId, o.id));
+    await unreserve(tx, items.map((i) => i.id));
     const [pay] = await tx.select().from(payment).where(eq(payment.orderId, o.id));
     if (pay?.status === 'held' && pay.providerRef) {
       const key = `${o.id}:release:1`;
@@ -244,15 +211,6 @@ export async function cancelByCustomer(deps: AppDeps, me: CustomerPrincipal, ord
     await transition(tx, o.id, o.status, 'cancelled', 'customer', me.customer_id, { reason });
   });
   return getOrderView(deps, orderId, me);
-}
-
-async function unreserveAll(tx: Tx, orderId: string) {
-  const moves = await tx.select().from(stockMove).where(and(eq(stockMove.refType, 'order'), eq(stockMove.refId, orderId), eq(stockMove.type, 'reserve')));
-  for (const m of moves) {
-    if (!m.lotId) continue;
-    await tx.update(stockLot).set({ reservedQty: sql`${stockLot.reservedQty} - ${m.qty}` }).where(eq(stockLot.id, m.lotId));
-    await tx.insert(stockMove).values({ storeId: m.storeId, productId: m.productId, lotId: m.lotId, type: 'unreserve', qty: m.qty, refType: 'order', refId: orderId });
-  }
 }
 
 export async function getOrderView(deps: AppDeps, orderId: string, me: CustomerPrincipal): Promise<OrderView> {

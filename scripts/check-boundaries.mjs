@@ -19,7 +19,7 @@ export const OWNERSHIP = {
   orders: ['order', 'orderItem', 'orderStatusLog'],
   payments: ['payment', 'paymentOp'],
   promo: ['promo', 'promoUse'],
-  wms: ['cell', 'supply', 'supplyItem', 'stockLot', 'stockMove', 'stocktake', 'stocktakeLine'],
+  wms: ['cell', 'supply', 'supplyItem', 'stockLot', 'stockMove', 'stocktake', 'stocktakeLine', 'pickTask'],
   kds: ['kdsItem', 'stopList'],
   dispatch: ['courier', 'courierShift', 'courierPosition', 'deliveryTask', 'courierPlan'],
   backoffice: ['parameter', 'auditLog'],
