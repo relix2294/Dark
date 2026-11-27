@@ -73,7 +73,7 @@ export async function buildApp(deps: AppDeps) {
   const app = Fastify({
     // за Caddy: адрес клиента — тот, что добавил наш единственный прокси; левые адреса X-Forwarded-For
     // подставляет сам клиент, им верить нельзя (иначе ограничение входа по IP обходится подделкой заголовка)
-    trustProxy: deps.config.NODE_ENV === 'production' ? 1 : false,
+    trustProxy: deps.config.NODE_ENV === 'production' ? (_addr: string, hop: number) => hop < 1 : false,
     logger: loggerOptions(deps.config.LOG_LEVEL, deps.config.NODE_ENV === 'development'),
     genReqId: (req) => (req.headers['x-request-id'] as string | undefined) ?? randomUUID(),
     requestIdLogLabel: 'request_id',
