@@ -86,6 +86,13 @@ export function registerMetrics(app: FastifyInstance, db: Db, token: string | un
     lines.push('# HELP dark_ready_without_courier Готовые заказы без курьера', '# TYPE dark_ready_without_courier gauge');
     for (const s of stores.rows) lines.push(`dark_ready_without_courier{store_id="${s.store_id}"} ${s.ready_no_courier}`);
 
+    // устройства в эпизоде «не на связи» (воркер ставит offline_alerted_at только в рабочие часы точки, пульс сбрасывает)
+    const silent = await db.execute<{ store_id: string; app: string; n: number }>(sql`
+      select store_id, app::text app, count(*)::int n from device_presence
+      where offline_alerted_at is not null and signed_off_at is null group by 1, 2`);
+    lines.push('# HELP dark_devices_offline Терминалы и экраны кухни не на связи дольше 2 минут в рабочее время', '# TYPE dark_devices_offline gauge');
+    for (const d of silent.rows) lines.push(`dark_devices_offline{store_id="${d.store_id}",app="${d.app}"} ${d.n}`);
+
     for (const p of providers) lines.push(...p());
     return reply.type('text/plain; version=0.0.4').send(lines.join('\n') + '\n');
   });

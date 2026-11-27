@@ -45,11 +45,8 @@ groups:
         annotations: { summary: "API не отвечает" }
 
       - alert: StaffScreenOffline
-        # Терминал сборщика или экран кухни не на связи 2 минуты в рабочее время (часы работы точки — 08–23 Душанбе, UTC+5)
-        expr: |
-          (absent(dark_ws_clients{role="picker"}) or sum by (store_id) (dark_ws_clients{role="picker"}) == 0
-           or absent(dark_ws_clients{role="cook"}) or sum by (store_id) (dark_ws_clients{role="cook"}) == 0)
-          and on() (hour() >= 3 and hour() < 18)
-        for: 2m
+        # Терминал сборщика или экран кухни не на связи 2 минуты в рабочее время точки (ТЗ §10).
+        # Пульс устройств и часы работы точки учитывает API; эпизод держится до следующего пульса.
+        expr: max by (store_id, app) (dark_devices_offline) > 0
         labels: { severity: ticket, to: shift_lead }
-        annotations: { summary: "Терминал или экран кухни не на связи" }
+        annotations: { summary: "Терминал или экран кухни не на связи ({{ $labels.app }}, точка {{ $labels.store_id }})" }
