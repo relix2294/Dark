@@ -9,9 +9,11 @@ export const PositionBatch = z.object({
     .min(1)
     .max(500),
 });
-export const DeliveredRequest = z.object({ geo: Geo, photo_url: z.string().optional() });
-export const PickupRequest = z.object({ package_barcodes: z.array(z.string()).min(1) });
-export const NoShowRequest = z.object({ calls: z.number().int().min(0).default(2), comment: z.string().max(200).optional() });
+/** Время события на устройстве: действие могло копиться без связи (ТЗ §11 — сервер принимает по времени события). */
+const EventAt = z.iso.datetime().optional();
+export const DeliveredRequest = z.object({ geo: Geo, photo_url: z.string().optional(), at: EventAt });
+export const PickupRequest = z.object({ package_barcodes: z.array(z.string()).min(1), at: EventAt });
+export const NoShowRequest = z.object({ calls: z.number().int().min(0).default(2), comment: z.string().max(200).optional(), at: EventAt });
 export const ShiftStartRequest = z.object({ transport: Transport.optional() });
 export const CourierTaskIdParams = z.object({ id: Uuid });
 export const CourierOrderIdParams = z.object({ id: Uuid });

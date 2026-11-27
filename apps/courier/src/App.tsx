@@ -2,10 +2,29 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
 import type { CourierSelfView, DeliveryTaskView, ShiftSummaryView } from '@dark/contracts';
-import { BRAND_RU, Badge, Button, COURIER_STATUS_RU, Card, ErrorBanner, Field, ORDER_STATUS_RU, Screen, Spinner, minutesLeft, time, useBarcodeScanner, useLive, useStaff } from '@dark/ui';
+import { BRAND_RU, Badge, Button, COURIER_STATUS_RU, Card, ErrorBanner, Field, ORDER_STATUS_RU, Screen, Spinner, minutesLeft, postOrQueue, time, useBarcodeScanner, useLive, useOfflineQueue, useStaff } from '@dark/ui';
 
 type Me = z.infer<typeof CourierSelfView>;
 type Task = z.infer<typeof DeliveryTaskView>;
+type Queue = ReturnType<typeof useOfflineQueue<unknown>>;
+
+/** Последняя известная копия с сервера: без связи и после перезагрузки курьер видит своё задание (ТЗ §11). */
+const cached = <T,>(key: string): T | undefined => {
+  try {
+    const v = localStorage.getItem(key);
+    return v ? (JSON.parse(v) as T) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+const remember = <T,>(key: string) => (v: T) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(v));
+  } catch {
+    /* хранилище недоступно — работаем без копии */
+  }
+  return v;
+};
 
 /**
  * Приложение курьера (ТЗ §9), этап 1 как PWA: смена, задание, скан пакетов, доставка и «клиент не вышел».
@@ -15,9 +34,16 @@ type Task = z.infer<typeof DeliveryTaskView>;
 export function App() {
   const { api, logout } = useStaff();
   const qc = useQueryClient();
-  const me = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/courier/me') });
-  const task = useQuery({ queryKey: ['task'], queryFn: () => api.get<Task | null>('/courier/tasks/current') });
+  const me = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/courier/me').then(remember('dark.courier.me')), initialData: () => cached<Me>('dark.courier.me'), initialDataUpdatedAt: 0 });
+  const task = useQuery({
+    queryKey: ['task'],
+    queryFn: () => api.get<Task | null>('/courier/tasks/current').then(remember('dark.courier.task')),
+    initialData: () => cached<Task | null>('dark.courier.task'),
+    initialDataUpdatedAt: 0,
+  });
   const refresh = () => void qc.invalidateQueries();
+  // действия без связи (забрал, доставлено, не вышел) копятся с временем события и уходят по порядку (ТЗ §11)
+  const actions = useOfflineQueue<unknown>(api, 'dark.courier.actions', refresh);
   // новое задание приходит событием task.offered — вибрация, чтобы курьер заметил
   useLive(api, { onEvent: (e) => { if (e.topic === 'task.offered') navigator.vibrate?.([200, 100, 200]); } });
   const shift = useMutation({ mutationFn: (p: 'start' | 'end' | 'break') => api.post<Me>(`/courier/shift/${p}`, p === 'start' ? { transport: 'bike' } : {}), onSuccess: refresh });
@@ -61,7 +87,17 @@ export function App() {
       title={m ? <span>{COURIER_STATUS_RU[m.status]} <Badge tone={m.status === 'free' ? 'green' : 'grey'}>доставок: {m.deliveries_today}</Badge></span> : 'Курьер'}
       actions={<Button onClick={logout}>Выйти</Button>}
     >
-      <ErrorBanner error={me.error ?? shift.error} />
+      <ErrorBanner error={actions.items.length ? null : (me.error ?? shift.error)} />
+      {actions.items.length > 0 && (
+        <div className="banner">
+          Нет связи — {actions.items.length} {actions.items.length === 1 ? 'действие ждёт' : 'действия ждут'} отправки: {actions.items.map((a) => a.label).join(', ')}. Отправим сами, когда появится сеть.
+        </div>
+      )}
+      {actions.failed.map((f) => (
+        <div key={f.key} className="banner banner-error" onClick={actions.clearFailed}>
+          «{f.label}» не принято сервером: {f.error}. Позвоните старшему смены.
+        </div>
+      ))}
       {m?.status === 'offline' ? (
         <>
           <Button big primary disabled={shift.isPending} onClick={() => shift.mutate('start')}>
@@ -71,7 +107,7 @@ export function App() {
         </>
       ) : (
         <>
-          {task.data ? <TaskCard task={task.data} geo={geo} onChange={refresh} /> : <div className="empty">Заданий нет. Ждём назначения…</div>}
+          {task.data ? <TaskCard task={task.data} geo={geo} queue={actions} onChange={refresh} /> : <div className="empty">Заданий нет. Ждём назначения…</div>}
           <div className="row">
             <Button disabled={shift.isPending || !!task.data} onClick={() => shift.mutate('break')}>
               {m?.status === 'break' ? 'Вернуться с перерыва' : 'Перерыв'}
@@ -90,8 +126,22 @@ export function App() {
   );
 }
 
-function TaskCard({ task, geo, onChange }: { task: Task; geo: GeolocationPosition | null; onChange: () => void }) {
+function TaskCard({ task: serverTask, geo, queue, onChange }: { task: Task; geo: GeolocationPosition | null; queue: Queue; onChange: () => void }) {
   const { api } = useStaff();
+  // то, что уже сделано, но ещё не дошло до сервера, показываем сделанным
+  const queued = new Set(queue.items.map((a) => a.path));
+  const pickedLocally = queued.has(`/courier/tasks/${serverTask.task_id}/pickup`);
+  const task: Task = pickedLocally && serverTask.status !== 'delivering'
+    ? { ...serverTask, status: 'delivering', orders: serverTask.orders.map((o) => (o.status === 'ready' ? { ...o, status: 'on_the_way' } : o)) }
+    : serverTask;
+  const doneLocally = (orderId: string) =>
+    queued.has(`/courier/orders/${orderId}/delivered`) ? 'доставлен — ждёт связи' : queued.has(`/courier/orders/${orderId}/no-show`) ? 'не вышел — ждёт связи' : null;
+  const act = (path: string, body: Record<string, unknown>, label: string) =>
+    postOrQueue(api, queue, path, { ...body, at: new Date().toISOString() }, label).then((r) => {
+      if (!r.queued) onChange();
+      return r;
+    });
+
   const [scanned, setScanned] = useState<string[]>([]);
   const [manual, setManual] = useState('');
   const [error, setError] = useState<unknown>(null);
@@ -99,13 +149,16 @@ function TaskCard({ task, geo, onChange }: { task: Task; geo: GeolocationPositio
   const allScanned = expected.every((b) => scanned.includes(b));
 
   const accept = useMutation({ mutationFn: () => api.post<Task>(`/courier/tasks/${task.task_id}/accept`), onSuccess: onChange, onError: setError });
-  const pickup = useMutation({ mutationFn: () => api.post<Task>(`/courier/tasks/${task.task_id}/pickup`, { package_barcodes: scanned }), onSuccess: () => { setScanned([]); onChange(); }, onError: setError });
-  const delivered = useMutation({
-    mutationFn: (orderId: string) => api.post(`/courier/orders/${orderId}/delivered`, { geo: { lat: geo?.coords.latitude ?? 0, lon: geo?.coords.longitude ?? 0 } }),
-    onSuccess: onChange,
+  const pickup = useMutation({
+    mutationFn: () => act(`/courier/tasks/${task.task_id}/pickup`, { package_barcodes: scanned }, 'забрал пакеты'),
+    onSuccess: () => setScanned([]),
     onError: setError,
   });
-  const noShow = useMutation({ mutationFn: (orderId: string) => api.post<Task>(`/courier/orders/${orderId}/no-show`, { calls: 2 }), onSuccess: onChange, onError: setError });
+  const delivered = useMutation({
+    mutationFn: (o: Task['orders'][number]) => act(`/courier/orders/${o.order_id}/delivered`, { geo: { lat: geo?.coords.latitude ?? 0, lon: geo?.coords.longitude ?? 0 } }, `доставлен ${o.number}`),
+    onError: setError,
+  });
+  const noShow = useMutation({ mutationFn: (o: Task['orders'][number]) => act(`/courier/orders/${o.order_id}/no-show`, { calls: 2 }, `не вышел ${o.number}`), onError: setError });
 
   useBarcodeScanner(
     useCallback((code: string) => setScanned((s) => (s.includes(code) ? s : [...s, code])), []),
@@ -148,15 +201,16 @@ function TaskCard({ task, geo, onChange }: { task: Task; geo: GeolocationPositio
             Обещано к {time(o.promised_at)} ({minutesLeft(o.promised_at)}) · пакет {o.package_barcode} · {o.temp_zones.join(', ')}
           </div>
           {task.status !== 'delivering' && scanned.includes(o.package_barcode) && <Badge tone="green">пакет отсканирован</Badge>}
-          {o.status === 'on_the_way' && (
+          {doneLocally(o.order_id) && <Badge tone="yellow">{doneLocally(o.order_id)}</Badge>}
+          {o.status === 'on_the_way' && !doneLocally(o.order_id) && (
             <>
               <a className="btn" href={navTo(o)} target="_blank" rel="noreferrer">
                 Маршрут ↗
               </a>
-              <Button big primary disabled={delivered.isPending || !geo} onClick={() => delivered.mutate(o.order_id)}>
+              <Button big primary disabled={delivered.isPending || !geo} onClick={() => delivered.mutate(o)}>
                 Доставлено
               </Button>
-              <Button danger disabled={noShow.isPending} onClick={() => confirm('2 звонка сделаны, клиент не вышел?') && noShow.mutate(o.order_id)}>
+              <Button danger disabled={noShow.isPending} onClick={() => confirm('2 звонка сделаны, клиент не вышел?') && noShow.mutate(o)}>
                 Клиент не вышел
               </Button>
             </>

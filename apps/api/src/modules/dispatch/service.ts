@@ -185,7 +185,23 @@ export async function accept(deps: AppDeps, me: StaffPrincipal, taskId: string) 
 }
 
 /** Скан ярлыков всех пакетов задания → заказы on_the_way, курьер delivering (ТЗ §3, §4). */
-export async function pickup(deps: AppDeps, me: StaffPrincipal, taskId: string, barcodes: string[]) {
+/** Действие из очереди без связи старше суток не принимаем — его время уже ничего не значит для расчётов. */
+const EVENT_MAX_AGE_MS = 24 * 3600_000;
+
+/**
+ * Время события курьера (ТЗ §11: сервер принимает события по времени события, а не получения).
+ * Без at — сейчас. Из будущего — сейчас. Раньше предыдущего шага (floor) — время шага: порядок не нарушается.
+ */
+export function eventTime(now: Date, raw: string | undefined, floor?: Date | null): Date {
+  if (!raw) return now;
+  const t = new Date(raw);
+  if (now.getTime() - t.getTime() > EVENT_MAX_AGE_MS) throw new AppError('VALIDATION', 'Событие старше суток — подтвердит старший смены', { at: raw });
+  if (t > now) return now; // часы телефона спешат — событие «сейчас»
+  if (floor && t < floor) return floor;
+  return t;
+}
+
+export async function pickup(deps: AppDeps, me: StaffPrincipal, taskId: string, barcodes: string[], rawAt?: string) {
   return deps.db.transaction(async (tx) => {
     const c = await courierOf(tx, me);
     const t = await loadTask(tx, c, taskId);
@@ -199,16 +215,17 @@ export async function pickup(deps: AppDeps, me: StaffPrincipal, taskId: string, 
     if (missing.length || extra.length) throw new AppError('WRONG_PRODUCT', 'Отсканируйте ярлыки всех пакетов задания', { missing, extra });
     if (t.status === 'offered') await setTaskStatus(tx, t, 'accepted', 'courier');
     if (t.status === 'accepted') await setTaskStatus(tx, t, 'at_store', 'courier');
-    await setTaskStatus(tx, t, 'picked_up', 'courier', { pickedUpAt: deps.clock.now() });
+    const at = eventTime(deps.clock.now(), rawAt, t.assignedAt);
+    await setTaskStatus(tx, t, 'picked_up', 'courier', { pickedUpAt: at });
     await setTaskStatus(tx, t, 'delivering', 'courier');
-    for (const o of orders) await transition(tx, o.id, 'ready', 'on_the_way', 'staff', me.staff_id, { task_id: t.id });
+    for (const o of orders) await transition(tx, o.id, 'ready', 'on_the_way', 'staff', me.staff_id, { task_id: t.id, ...eventMeta(deps, rawAt) }, at);
     await setCourierStatus(tx, c, 'delivering', 'courier');
     return taskView(tx, t);
   });
 }
 
 /** Подтверждение у двери курьером: только внутри геозоны адреса (ТЗ §11). */
-export async function delivered(deps: AppDeps, me: StaffPrincipal, orderId: string, geo: Geo, photoUrl?: string) {
+export async function delivered(deps: AppDeps, me: StaffPrincipal, orderId: string, geo: Geo, photoUrl?: string, rawAt?: string) {
   const result = await deps.db.transaction(async (tx) => {
     const c = await courierOf(tx, me);
     const [t] = await tx.select().from(deliveryTask).where(and(eq(deliveryTask.courierId, c.id), eq(deliveryTask.status, 'delivering'), sql`${orderId} = any(${deliveryTask.orderIds})`)).for('update');
@@ -220,7 +237,8 @@ export async function delivered(deps: AppDeps, me: StaffPrincipal, orderId: stri
     if (dist > P.DELIVERY_GEOFENCE_M) {
       throw new AppError('TOO_FAR_FROM_ADDRESS', 'Слишком далеко от адреса — подтвердить может старший смены', { distance_m: Math.round(dist), geofence_m: P.DELIVERY_GEOFENCE_M });
     }
-    return finishDelivery(tx, deps, t, c, o, me.staff_id, { distance_m: Math.round(dist), photo_url: photoUrl ?? null });
+    const at = eventTime(deps.clock.now(), rawAt, t.pickedUpAt);
+    return finishDelivery(tx, deps, t, c, o, me.staff_id, { distance_m: Math.round(dist), photo_url: photoUrl ?? null, ...eventMeta(deps, rawAt) }, at);
   });
   // списание — вне транзакции заказа; при неуспехе повтор по расписанию (воркер payments.capture)
   const cap = await captureAmountNow(deps, result.orderId, result.amount);
@@ -250,28 +268,30 @@ async function finishDelivery(
   o: typeof order.$inferSelect,
   actorId: string,
   meta: Record<string, unknown>,
+  at: Date = deps.clock.now(),
 ) {
-  await transition(tx, o.id, o.status, 'delivered', 'staff', actorId, meta);
+  await transition(tx, o.id, o.status, 'delivered', 'staff', actorId, meta, at);
   await setCaptured(tx, o.id, o.totalDirams);
-  await markCustomerDelivered(tx, o.customerId, deps.clock.now());
+  await markCustomerDelivered(tx, o.customerId, at);
   const rest = await tx.select().from(order).where(and(inArray(order.id, t.orderIds), eq(order.status, 'on_the_way')));
   if (rest.length === 0) {
-    await setTaskStatus(tx, t, 'done', 'system', { finishedAt: deps.clock.now() });
+    await setTaskStatus(tx, t, 'done', 'system', { finishedAt: at });
     await setCourierStatus(tx, c, 'returning', 'system');
   }
   return { orderId: o.id, amount: o.totalDirams, task: t };
 }
 
 /** Клиент не вышел: 2 звонка и ожидание → returning (ТЗ §11). */
-export async function noShow(deps: AppDeps, me: StaffPrincipal, orderId: string, comment?: string) {
+export async function noShow(deps: AppDeps, me: StaffPrincipal, orderId: string, comment?: string, rawAt?: string) {
   return deps.db.transaction(async (tx) => {
     const c = await courierOf(tx, me);
     const [t] = await tx.select().from(deliveryTask).where(and(eq(deliveryTask.courierId, c.id), eq(deliveryTask.status, 'delivering'), sql`${orderId} = any(${deliveryTask.orderIds})`)).for('update');
     if (!t) throw notFound('Задание с этим заказом', orderId);
-    await transition(tx, orderId, 'on_the_way', 'returning', 'staff', me.staff_id, { comment: comment ?? null });
+    const at = eventTime(deps.clock.now(), rawAt, t.pickedUpAt);
+    await transition(tx, orderId, 'on_the_way', 'returning', 'staff', me.staff_id, { comment: comment ?? null, ...eventMeta(deps, rawAt) }, at);
     const rest = await tx.select().from(order).where(and(inArray(order.id, t.orderIds), eq(order.status, 'on_the_way')));
     if (rest.length === 0) {
-      await setTaskStatus(tx, t, 'failed', 'courier', { finishedAt: deps.clock.now() });
+      await setTaskStatus(tx, t, 'failed', 'courier', { finishedAt: at });
       await setCourierStatus(tx, c, 'returning', 'system');
     }
     return taskView(tx, t);
@@ -531,4 +551,9 @@ export async function courierForOrder(tx: Tx, orderId: string) {
   if (!row) return null;
   const [pos] = await tx.select().from(courierPosition).where(eq(courierPosition.courierId, row.t.courierId)).orderBy(desc(courierPosition.at)).limit(1);
   return { courier_id: row.t.courierId, name: row.name, task_status: row.t.status, position: pos ? { lat: pos.lat, lon: pos.lon } : null };
+}
+
+/** Для журнала статусов: когда событие случилось на устройстве и когда дошло до сервера. */
+function eventMeta(deps: AppDeps, rawAt: string | undefined) {
+  return rawAt ? { event_at: rawAt, received_at: deps.clock.now().toISOString() } : {};
 }

@@ -49,12 +49,12 @@ export async function registerDispatch(app: FastifyInstance, deps: AppDeps) {
     svc.accept(deps, me(req.principal), req.params.id),
   );
   r.post('/courier/tasks/:id/pickup', { schema: { tags, security: sec, params: CourierTaskIdParams, body: PickupRequest, response: { 200: DeliveryTaskView } } }, async (req) =>
-    svc.pickup(deps, me(req.principal), req.params.id, req.body.package_barcodes),
+    svc.pickup(deps, me(req.principal), req.params.id, req.body.package_barcodes, req.body.at),
   );
   r.post('/courier/orders/:id/delivered', { schema: { tags, security: sec, params: CourierOrderIdParams, body: DeliveredRequest } }, async (req) =>
-    svc.delivered(deps, requireStaff(req.principal, 'courier.app'), req.params.id, req.body.geo, req.body.photo_url),
+    svc.delivered(deps, requireStaff(req.principal, 'courier.app'), req.params.id, req.body.geo, req.body.photo_url, req.body.at),
   );
   r.post('/courier/orders/:id/no-show', { schema: { tags, security: sec, params: CourierOrderIdParams, body: NoShowRequest, response: { 200: DeliveryTaskView } } }, async (req) =>
-    svc.noShow(deps, me(req.principal), req.params.id, req.body.comment),
+    svc.noShow(deps, me(req.principal), req.params.id, req.body.comment, req.body.at),
   );
 }

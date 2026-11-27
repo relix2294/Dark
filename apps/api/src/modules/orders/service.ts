@@ -237,11 +237,13 @@ export async function transition(
   actorType: 'customer' | 'staff' | 'system',
   actorId: string | null,
   meta?: Record<string, unknown>,
+  /** Время события, если оно было раньше получения (действие курьера из очереди без связи). */
+  at: Date = new Date(),
 ) {
   orderMachine.assert(from, to, actorType);
   const updated = await tx
     .update(order)
-    .set({ status: to, updatedAt: new Date(), ...(to === 'ready' ? { readyAt: new Date() } : {}), ...(to === 'delivered' ? { deliveredAt: new Date() } : {}) })
+    .set({ status: to, updatedAt: new Date(), ...(to === 'ready' ? { readyAt: at } : {}), ...(to === 'delivered' ? { deliveredAt: at } : {}) })
     .where(and(eq(order.id, orderId), eq(order.status, from)))
     .returning({ id: order.id });
   if (updated.length === 0) throw new AppError('INVALID_TRANSITION', `Заказ уже не в статусе ${from}`, { from, to });
