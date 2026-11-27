@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
-import { ConsoleCouriersView, ConsoleOrdersView } from '@dark/contracts';
+import { ConsoleAlertsView, ConsoleCouriersView, ConsoleOrdersView } from '@dark/contracts';
 import { BRAND_RU, Badge, Button, COURIER_STATUS_RU, Card, ErrorBanner, Field, MapView, ORDER_STATUS_RU, somoni, statusTone, time, useStaff, type MapMarker } from '@dark/ui';
 
 type Orders = z.infer<typeof ConsoleOrdersView>;
 type Couriers = z.infer<typeof ConsoleCouriersView>;
 type Order = Orders['orders'][number];
+type Alert = z.infer<typeof ConsoleAlertsView>['alerts'][number];
+const LEVEL_TONE = { critical: 'red', warning: 'yellow', info: 'blue' } as const;
+const LEVEL_RU = { critical: 'срочно', warning: 'внимание', info: 'инфо' } as const;
 
 /** Пульт: все заказы точки по статусам, курьеры, ручное назначение, отмена, возврат, тревоги (ТЗ §9). */
 export function Console({ storeId, storeGeo }: { storeId: string; storeGeo: { lat: number; lon: number } | null }) {
@@ -14,6 +17,7 @@ export function Console({ storeId, storeGeo }: { storeId: string; storeGeo: { la
   const qc = useQueryClient();
   const orders = useQuery({ queryKey: ['console-orders', storeId], queryFn: () => api.get<Orders>(`/console/stores/${storeId}/orders`) });
   const couriers = useQuery({ queryKey: ['console-couriers', storeId], queryFn: () => api.get<Couriers>(`/console/stores/${storeId}/couriers`) });
+  const feed = useQuery({ queryKey: ['console-alerts', storeId], queryFn: () => api.get<z.infer<typeof ConsoleAlertsView>>(`/console/stores/${storeId}/alerts?hours=12`) });
   const [selected, setSelected] = useState<Order | null>(null);
   const refresh = () => void qc.invalidateQueries({ queryKey: ['console-orders', storeId] });
 
@@ -69,6 +73,13 @@ export function Console({ storeId, storeGeo }: { storeId: string; storeGeo: { la
           {orders.data && orders.data.orders.length === 0 && <div className="empty">Активных заказов нет</div>}
         </div>
         <div style={{ flex: 1, minWidth: 320, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <Alerts
+            alerts={feed.data?.alerts ?? []}
+            onOpen={(a) => {
+              const o = (orders.data?.orders ?? []).find((x) => x.id === a.order_id);
+              if (o) setSelected(o);
+            }}
+          />
           {storeGeo && <MapView center={storeGeo} height={300} fit markers={mapMarkers(storeGeo, orders.data?.orders ?? [], couriers.data?.couriers ?? [])} />}
           <h2>Курьеры</h2>
           {(couriers.data?.couriers ?? []).map((c) => (
@@ -179,4 +190,33 @@ function mapMarkers(store: { lat: number; lon: number }, orders: Order[], courie
   for (const c of couriers) if (c.position) out.push({ id: c.courier_id, ...c.position, color: c.status === 'free' ? '#3ccf7a' : '#ff9f43', label: c.name.split(' ').pop() ?? c.name, title: c.status });
   for (const o of orders) if (o.geo && ['ready', 'on_the_way', 'picking', 'cooking'].includes(o.status)) out.push({ id: o.id, ...o.geo, color: o.status === 'on_the_way' ? '#8fb3ff' : '#ff5b5b', radius: 6, title: `${o.number} · ${ORDER_STATUS_RU[o.status]}` });
   return out;
+}
+
+/** Лента тревог (ТЗ §9–10): новые сверху; срочные за последний час подсвечены. Клик — открыть заказ. */
+function Alerts({ alerts, onOpen }: { alerts: Alert[]; onOpen: (a: Alert) => void }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? alerts : alerts.slice(0, 8);
+  const hot = alerts.filter((a) => a.level === 'critical' && Date.now() - new Date(a.created_at).getTime() < 3600_000).length;
+  return (
+    <>
+      <h2>
+        Тревоги {hot > 0 && <Badge tone="red">{hot} срочных</Badge>}
+      </h2>
+      {alerts.length === 0 && <div className="empty">За 12 часов тревог нет</div>}
+      {shown.map((a) => (
+        <Card key={a.id} tone={a.level === 'critical' ? 'red' : a.level === 'warning' ? 'yellow' : undefined} onClick={a.order_id ? () => onOpen(a) : undefined}>
+          <div className="row">
+            <Badge tone={LEVEL_TONE[a.level]}>{LEVEL_RU[a.level]}</Badge>
+            <span className="muted">{time(a.created_at)}</span>
+          </div>
+          <div>{a.text}</div>
+        </Card>
+      ))}
+      {alerts.length > 8 && (
+        <Button onClick={() => setAll(!all)}>
+          {all ? 'Свернуть' : `Ещё ${alerts.length - 8}`}
+        </Button>
+      )}
+    </>
+  );
 }
