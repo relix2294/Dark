@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Tx } from '../../shared/db/client.js';
 import { order, orderItem, product } from '../../shared/db/schema/index.js';
 import { lineTotal, sum } from '../../shared/money.js';
@@ -81,4 +81,19 @@ export async function recalcTotals(tx: Tx, orderId: string) {
 export async function pendingItemIds(tx: Tx, orderId: string) {
   const rows = await tx.select({ id: orderItem.id }).from(orderItem).where(and(eq(orderItem.orderId, orderId), inArray(orderItem.status, ['pending'])));
   return rows.map((r) => r.id);
+}
+
+/** Итог списания по заказу (доставлен, неявка, отмена с удержанием) и причина отмены. */
+export async function setCaptured(tx: Tx, orderId: string, amount: number, cancelReason?: string) {
+  await tx.update(order).set({ capturedDirams: amount, ...(cancelReason ? { cancelReason } : {}) }).where(eq(order.id, orderId));
+}
+
+/** Обещание клиенту, посчитанное кухней (ТЗ §8). */
+export async function setPromisedAt(tx: Tx, orderId: string, promisedAt: Date) {
+  await tx.update(order).set({ promisedAt }).where(eq(order.id, orderId));
+}
+
+/** Заказ кухни упакован: все позиции считаются собранными в заказанном количестве. */
+export async function markAllItemsPicked(tx: Tx, orderId: string) {
+  await tx.update(orderItem).set({ status: 'picked', qtyPicked: sql`${orderItem.qtyOrdered}` }).where(eq(orderItem.orderId, orderId));
 }

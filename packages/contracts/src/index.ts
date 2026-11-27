@@ -9,3 +9,4 @@ export * from './wms.js';
 export * from './kds.js';
 export * from './courier.js';
 export * from './console.js';
+export * from './admin.js';

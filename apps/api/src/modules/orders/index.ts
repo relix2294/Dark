@@ -8,7 +8,7 @@ import { openOrderStream } from './stream.js';
 
 export { transition, cancelByStaff, markPaymentFailed, consoleOrders } from './service.js';
 export { orderMachine, ACTIVE_STATUSES } from './state-machine.js';
-export { getItemsWithProducts, markItemPicked, markItemMissing, addReplacementItem, recalcTotals, pendingItemIds } from './items.js';
+export { getItemsWithProducts, markItemPicked, markItemMissing, addReplacementItem, recalcTotals, pendingItemIds, setCaptured, setPromisedAt, markAllItemsPicked } from './items.js';
 
 export async function registerOrders(app: FastifyInstance, deps: AppDeps) {
   const r = app.withTypeProvider<ZodTypeProvider>();

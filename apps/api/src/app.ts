@@ -23,7 +23,12 @@ import type { WalletAdapter } from './modules/payments/adapter.js';
 import { registerCatalog } from './modules/catalog/index.js';
 import { registerOrders } from './modules/orders/index.js';
 import { registerCustomers } from './modules/customers/index.js';
-import { registerBackoffice } from './modules/backoffice/index.js';
+import { registerBackoffice, registerReports } from './modules/backoffice/index.js';
+import { registerCatalogAdmin } from './modules/catalog/index.js';
+import { registerPromoAdmin } from './modules/promo/index.js';
+import { isStaffActive, registerStaffAdmin } from './modules/customers/index.js';
+import { registerWmsAdmin } from './modules/wms/index.js';
+import { registerCourierPlan } from './modules/dispatch/index.js';
 import { registerWms } from './modules/wms/index.js';
 import { registerKds } from './modules/kds/index.js';
 import { registerDispatch } from './modules/dispatch/index.js';
@@ -75,6 +80,12 @@ export async function buildApp(deps: AppDeps) {
   await app.register(swaggerUi, { routePrefix: '/docs' });
 
   await app.register(authPlugin, { tokens: deps.tokens });
+  // Заблокированный сотрудник теряет доступ сразу, а не по истечении токена
+  app.addHook('onRequest', async (req) => {
+    const p = req.principal;
+    if (p?.kind === 'staff' && !(await isStaffActive(deps, p.staff_id))) throw new AppError('UNAUTHORIZED', 'Сотрудник заблокирован');
+  });
+
   await app.register(idempotencyPlugin, { db: deps.db });
 
   // Единый формат ошибки (ТЗ §4)
@@ -107,6 +118,13 @@ export async function buildApp(deps: AppDeps) {
       await registerKds(api, deps);
       await registerDispatch(api, deps);
       await registerBackoffice(api, deps);
+      // админка
+      await registerCatalogAdmin(api, deps);
+      await registerPromoAdmin(api, deps);
+      await registerStaffAdmin(api, deps);
+      await registerWmsAdmin(api, deps);
+      await registerCourierPlan(api, deps);
+      await registerReports(api, deps);
     },
     { prefix: '/api/v1' },
   );

@@ -7,7 +7,7 @@ import { AppError, notFound } from '../../shared/errors/index.js';
 import { publish } from '../../shared/events/outbox.js';
 import { distanceM, travelMinutes, type Geo } from '../../shared/geo.js';
 import { DEFAULT_PARAMS } from '../../shared/params/index.js';
-import { ACTIVE_STATUSES, transition } from '../orders/index.js';
+import { ACTIVE_STATUSES, setCaptured, transition } from '../orders/index.js';
 import { captureAmountNow } from '../payments/index.js';
 import { returnPickedItems } from '../wms/index.js';
 import { planDispatch, type FreeCourier, type PendingOrder } from './planner.js';
@@ -221,7 +221,7 @@ export async function delivered(deps: AppDeps, me: StaffPrincipal, orderId: stri
       throw new AppError('TOO_FAR_FROM_ADDRESS', 'Слишком далеко от адреса — подтвердить может старший смены', { distance_m: Math.round(dist), geofence_m: P.DELIVERY_GEOFENCE_M });
     }
     await transition(tx, o.id, o.status, 'delivered', 'staff', me.staff_id, { distance_m: Math.round(dist), photo_url: photoUrl ?? null, override });
-    await tx.update(order).set({ capturedDirams: o.totalDirams }).where(eq(order.id, o.id));
+    await setCaptured(tx, o.id, o.totalDirams);
     const rest = await tx.select().from(order).where(and(inArray(order.id, t.orderIds), inArray(order.status, [...ACTIVE_STATUSES])));
     const taskDone = rest.filter((x) => x.status === 'on_the_way').length === 0;
     if (taskDone) {
@@ -263,7 +263,7 @@ export async function markReturned(deps: AppDeps, me: StaffPrincipal, orderId: s
     await transition(tx, o.id, 'returning', 'returned', 'staff', me.staff_id, { comment: comment ?? null });
     if (o.brand === 'LAB') await returnPickedItems(tx, o.storeId, o.id, me.staff_id);
     const amount = o.brand === 'LAB' ? o.deliveryFeeDirams : o.totalDirams;
-    await tx.update(order).set({ capturedDirams: amount, cancelReason: 'клиент не вышел' }).where(eq(order.id, o.id));
+    await setCaptured(tx, o.id, amount, 'клиент не вышел');
     return { amount };
   });
   await captureAmountNow(deps, orderId, r.amount);

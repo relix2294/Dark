@@ -5,6 +5,7 @@ import { payment, paymentOp } from '../../shared/db/schema/index.js';
 import { AppError, notFound } from '../../shared/errors/index.js';
 import { publish } from '../../shared/events/outbox.js';
 import { PENDING_STALE_MS, paymentMachine } from './state-machine.js';
+import type { HoldResult } from './adapter.js';
 
 /**
  * Платежи (ТЗ §5): холд ставит orders при создании заказа; здесь — capture при доставке, release при отмене,
@@ -27,6 +28,31 @@ async function nextOp(tx: Tx, paymentId: string, orderId: string, type: 'capture
 async function setStatus(tx: Tx, p: typeof payment.$inferSelect, to: typeof p.status, patch: Partial<typeof payment.$inferInsert> = {}) {
   paymentMachine.assert(p.status, to, 'system');
   await tx.update(payment).set({ status: to, ...patch }).where(and(eq(payment.id, p.id), eq(payment.status, p.status)));
+}
+
+/** Создание заказа: payment(hold_pending) + payment_op(hold) в транзакции заказа (ТЗ §5 п.1). */
+export async function openHold(tx: Tx, orderId: string, amount: number) {
+  const [p] = await tx.insert(payment).values({ orderId, status: 'hold_pending', holdDirams: amount }).returning();
+  const key = `${orderId}:hold:1`;
+  await tx.insert(paymentOp).values({ paymentId: p!.id, type: 'hold', amountDirams: amount, idempotencyKey: key });
+  return { paymentId: p!.id, key };
+}
+
+/** Результат hold от банка (ТЗ §5 п.3–4). timeout — платёж остаётся hold_pending, решит сверка. */
+export async function applyHoldResult(tx: Tx, paymentId: string, key: string, res: HoldResult) {
+  const [p] = await tx.select().from(payment).where(eq(payment.id, paymentId)).for('update');
+  if (!p) throw notFound('Платёж', paymentId);
+  if (res.ok) {
+    await setStatus(tx, p, 'held', { providerRef: res.providerRef, holdExpiresAt: res.expiresAt, lastError: null });
+    await tx.update(paymentOp).set({ status: 'ok' }).where(eq(paymentOp.idempotencyKey, key));
+    await publish(tx, { topic: 'payment.held', aggregateType: 'payment', aggregateId: p.id, payload: { order_id: p.orderId, amount: p.holdDirams } });
+  } else if (res.reason === 'timeout') {
+    await tx.update(payment).set({ lastError: res.message }).where(eq(payment.id, p.id));
+  } else {
+    await setStatus(tx, p, 'failed', { lastError: res.message });
+    await tx.update(paymentOp).set({ status: 'failed' }).where(eq(paymentOp.idempotencyKey, key));
+    await publish(tx, { topic: 'payment.failed', aggregateType: 'payment', aggregateId: p.id, payload: { order_id: p.orderId, reason: res.reason } });
+  }
 }
 
 /** Доставлено: списание фактической суммы. Готовит capture_pending в транзакции заказа; банк вызывается отдельно (executeCapture). */

@@ -7,6 +7,7 @@ import { address, customer, userStaff } from '../../shared/db/schema/index.js';
 import { requireCustomer } from '../../shared/auth/index.js';
 import { AppError } from '../../shared/errors/index.js';
 import { verifyPin } from '../../shared/auth/index.js';
+export { registerStaffAdmin, isStaffActive } from './admin.js';
 
 /**
  * Модуль customers: вход клиента (обмен токена DC Next) и вход персонала (телефон + PIN).

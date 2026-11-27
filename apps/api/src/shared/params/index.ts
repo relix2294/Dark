@@ -10,6 +10,8 @@ export const DEFAULT_PARAMS = {
   SOR_PREASSIGN_MS: 3 * 60_000,
   SOR_SLACK_BUFFER_MS: 10 * 60_000,
   LAB_RESERVE: 1,
+  /** Сколько заказов курьер развозит в час — для графика курьеров. */
+  COURIER_ORDERS_PER_HOUR: 3,
   RETURN_LOOKAHEAD_MS: 2 * 60_000,
   OFFER_TIMEOUT_MS: 30_000,
   AUTO_ACCEPT: true,

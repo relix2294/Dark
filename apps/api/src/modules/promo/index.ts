@@ -80,3 +80,5 @@ export async function recordUse(tx: Tx, p: PromoRule, customerId: string, orderI
   if (updated.length === 0) throw new AppError('PROMO_NOT_APPLICABLE', 'Бюджет промо исчерпан');
   await tx.insert(promoUse).values({ promoId: p.id, customerId, orderId, amountDirams: amount });
 }
+
+export { registerPromoAdmin } from './admin.js';

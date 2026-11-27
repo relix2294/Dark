@@ -4,8 +4,8 @@
  * Правила:
  *  1. modules/X/** может импортировать из modules/Y только `../Y/index.js` (публичный интерфейс).
  *  2. shared/** не импортирует из modules/**.
- *  3. Схема БД (shared/db/schema) — импортируется только внутри своего модуля или shared; это допустимо,
- *     но запись в таблицу чужого модуля запрещена по соглашению (ревью) — таблицы перечислены в OWNERSHIP.
+ *  3. Схему БД читать может любой модуль (отчёты, представления).
+ *  4. Писать (insert/update/delete) в таблицу может только её владелец из OWNERSHIP.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve, dirname, sep } from 'node:path';
@@ -22,8 +22,8 @@ export const OWNERSHIP = {
   wms: ['cell', 'supply', 'supplyItem', 'stockLot', 'stockMove', 'stocktake', 'stocktakeLine', 'pickTask'],
   kds: ['kdsItem', 'stopList'],
   dispatch: ['courier', 'courierShift', 'courierPosition', 'deliveryTask', 'courierPlan'],
-  backoffice: ['parameter', 'auditLog'],
-  shared: ['outbox', 'idempotencyKey'],
+  backoffice: ['parameter'],
+  shared: ['outbox', 'idempotencyKey', 'auditLog'],
 };
 
 function walk(dir, out = []) {
@@ -36,6 +36,8 @@ function walk(dir, out = []) {
 }
 
 const importRe = /^\s*(?:import|export)\s[^'"]*?from\s+['"]([^'"]+)['"]/gm;
+const writeRe = /\.(insert|update|delete)\(\s*(\w+)\s*\)/g;
+const owner = new Map(Object.entries(OWNERSHIP).flatMap(([mod, tables]) => tables.map((t) => [t, mod])));
 const violations = [];
 
 for (const file of walk(ROOT)) {
@@ -43,6 +45,19 @@ for (const file of walk(ROOT)) {
   const src = readFileSync(file, 'utf8');
   const inModule = rel.match(/^modules\/([^/]+)\//)?.[1] ?? null;
   const inShared = rel.startsWith('shared/');
+
+  // 4. Запись в таблицу — только модулем-владельцем (shared/* пишет только свои таблицы; seed — исключение)
+  const writer = inModule ?? (inShared ? 'shared' : null);
+  if (writer && !rel.endsWith('seed.ts')) {
+    for (const m of src.matchAll(writeRe)) {
+      const table = m[2];
+      const tableOwner = owner.get(table);
+      if (tableOwner && tableOwner !== writer) {
+        const line = src.slice(0, m.index).split('\n').length;
+        violations.push(`${rel}:${line}: ${m[1]}(${table}) — таблица модуля ${tableOwner}; вызовите функцию из его index.ts`);
+      }
+    }
+  }
 
   for (const m of src.matchAll(importRe)) {
     const spec = m[1];

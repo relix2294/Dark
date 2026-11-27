@@ -6,7 +6,6 @@ import type { Tx } from '../../shared/db/client.js';
 import {
   cell,
   order,
-  orderItem,
   pickTask,
   price,
   product,

@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import type { StaffPrincipal, Station } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
 import type { Tx } from '../../shared/db/client.js';
@@ -7,7 +7,7 @@ import { AppError, notFound } from '../../shared/errors/index.js';
 import { publish } from '../../shared/events/outbox.js';
 import { DEFAULT_PARAMS } from '../../shared/params/index.js';
 import { getDishes } from '../catalog/index.js';
-import { transition } from '../orders/index.js';
+import { markAllItemsPicked, setPromisedAt, transition } from '../orders/index.js';
 import { consumeIngredients } from '../wms/index.js';
 import { dishColor, scheduleOrder, sorPromise, type StationLoad } from './schedule.js';
 
@@ -66,7 +66,7 @@ export async function enqueueOrder(tx: Tx, deps: AppDeps, o: { id: string; store
     })),
   );
   const promisedAt = sorPromise(plan.targetReadyAt, DEFAULT_PARAMS.SOR_PREASSIGN_MS, travelMs);
-  await tx.update(order).set({ promisedAt }).where(eq(order.id, o.id));
+  await setPromisedAt(tx, o.id, promisedAt);
   return { targetReadyAt: plan.targetReadyAt, promisedAt };
 }
 
@@ -176,7 +176,7 @@ export async function packed(deps: AppDeps, me: StaffPrincipal, orderId: string)
     const dishes = await getDishes(tx, oi.map((i) => i.productId));
     const consumption = oi.flatMap((i) => (dishes.get(i.productId)?.recipe ?? []).map((r) => ({ productId: r.product_id, grams: r.grams * i.qtyOrdered })));
     await consumeIngredients(tx, storeId, orderId, consumption, me.staff_id);
-    await tx.update(orderItem).set({ status: 'picked', qtyPicked: sql`${orderItem.qtyOrdered}` }).where(eq(orderItem.orderId, orderId));
+    await markAllItemsPicked(tx, orderId);
     // кухня могла принять заказ сразу в pack без start (например, только холодные блюда отмечены done) — статус cooking обязателен перед ready
     if (o.status === 'paid_hold') await transition(tx, o.id, 'paid_hold', 'cooking', 'staff', me.staff_id);
     await transition(tx, o.id, 'cooking', 'ready', 'staff', me.staff_id);

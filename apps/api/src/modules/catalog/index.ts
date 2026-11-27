@@ -10,6 +10,7 @@ import { pointInPolygon } from '../../shared/geo.js';
 import { isOpenAt } from './hours.js';
 
 export { isOpenAt } from './hours.js';
+export { registerCatalogAdmin } from './admin.js';
 
 /** Публичный интерфейс модуля catalog для orders/cart. */
 export type PricedProduct = {

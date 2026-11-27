@@ -18,7 +18,9 @@ import type { AppDeps } from '../../app.js';
 import { cancelByStaff, consoleOrders } from '../orders/index.js';
 import { consoleCouriers, manualAssign, markReturned } from '../dispatch/index.js';
 import { refund } from '../payments/index.js';
+export { registerReports } from './reports.js';
 import { auditLog, parameter } from '../../shared/db/schema/index.js';
+import { audit as auditDb, type AuditEntry } from '../../shared/audit.js';
 import { requireStaff, requireStaffAny } from '../../shared/auth/index.js';
 import { DEFAULT_PARAMS, resolveParams, type ParamKey } from '../../shared/params/index.js';
 
@@ -36,12 +38,8 @@ export async function getParams(deps: AppDeps, storeId: string | null) {
   return resolveParams(overrides);
 }
 
-export async function audit(
-  deps: AppDeps,
-  entry: { actorType: string; actorId: string | null; action: string; objectType: string; objectId: string; before?: unknown; after?: unknown; reason?: string; storeId?: string | null },
-) {
-  await deps.db.insert(auditLog).values({ ...entry, before: entry.before ?? null, after: entry.after ?? null, reason: entry.reason ?? null, storeId: entry.storeId ?? null });
-}
+
+const audit = (deps: AppDeps, e: AuditEntry) => auditDb(deps.db, e);
 
 const ParamsPath = z.object({ store_id: z.uuid() });
 const ParamsBody = z.object({ key: z.enum(Object.keys(DEFAULT_PARAMS) as [ParamKey, ...ParamKey[]]), value: z.unknown(), reason: z.string().min(1).max(200) });

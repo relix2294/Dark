@@ -2,7 +2,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { Brand, CartResponse, CreateOrderRequest, CustomerPrincipal, OrderStatus, OrderView } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
 import type { Tx } from '../../shared/db/client.js';
-import { address, customer, order, orderItem, orderStatusLog, payment, paymentOp } from '../../shared/db/schema/index.js';
+import { address, customer, order, orderItem, orderStatusLog } from '../../shared/db/schema/index.js';
 import { AppError, notFound } from '../../shared/errors/index.js';
 import { publish } from '../../shared/events/outbox.js';
 import { holdAmount } from '../../shared/money.js';
@@ -11,7 +11,7 @@ import { getStore, isOpenAt, priceProducts, resolveZone } from '../catalog/index
 import { applyPromo, countUses, findPromo, recordUse } from '../promo/index.js';
 import { reserveForOrder, unreserve } from '../wms/index.js';
 import { enqueueOrder } from '../kds/index.js';
-import { releaseHold, captureAmountNow } from '../payments/index.js';
+import { applyHoldResult, captureAmountNow, openHold, releaseHold } from '../payments/index.js';
 import { courierForOrder } from '../dispatch/index.js';
 import type { StaffPrincipal } from '@dark/contracts';
 import { percentOf } from '../../shared/money.js';
@@ -137,11 +137,9 @@ export async function createOrder(deps: AppDeps, me: CustomerPrincipal, input: C
 
     const hasWeighted = input.items.some((i) => q.products.get(i.product_id)?.isWeighted);
     const hold = holdAmount(q.cart.total_dirams, input.brand === 'LAB' && hasWeighted, params.HOLD_BUFFER_PCT);
-    const [pay] = await tx.insert(payment).values({ orderId: o!.id, status: 'hold_pending', holdDirams: hold }).returning();
-    const idemKey = `${o!.id}:hold:1`;
-    await tx.insert(paymentOp).values({ paymentId: pay!.id, type: 'hold', amountDirams: hold, idempotencyKey: idemKey });
+    const { paymentId, key: idemKey } = await openHold(tx, o!.id, hold);
     await publish(tx, { topic: 'order.created', aggregateType: 'order', aggregateId: o!.id, payload: { number, brand: input.brand, store_id: q.store.id } });
-    return { o: o!, items, pay: pay!, idemKey, hold, products: q.products, store: q.store, addr: zoneRow! };
+    return { o: o!, items, paymentId, idemKey, hold, products: q.products, store: q.store, addr: zoneRow! };
   });
 
   // Шаг 2: вызов банка вне транзакции БД (таймаут PAYMENT_HOLD_TIMEOUT_MS)
@@ -152,24 +150,17 @@ export async function createOrder(deps: AppDeps, me: CustomerPrincipal, input: C
 
   // Шаг 3: результат — в транзакции: held + paid_hold + резерв, либо failed
   await deps.db.transaction(async (tx) => {
+    await applyHoldResult(tx, created.paymentId, created.idemKey, res);
     if (res.ok) {
-      await tx.update(payment).set({ status: 'held', providerRef: res.providerRef, holdExpiresAt: res.expiresAt }).where(eq(payment.id, created.pay.id));
-      await tx.update(paymentOp).set({ status: 'ok' }).where(eq(paymentOp.idempotencyKey, created.idemKey));
       await transition(tx, created.o.id, 'created', 'paid_hold', 'system', null);
       if (created.o.brand === 'SOR') {
         const travelMs = travelMinutes(created.store, created.addr, 'bike') * 60_000;
         await enqueueOrder(tx, deps, created.o, created.items, travelMs);
       }
-      await publish(tx, { topic: 'payment.held', aggregateType: 'payment', aggregateId: created.pay.id, payload: { order_id: created.o.id, amount: created.hold } });
-    } else if (res.reason === 'timeout') {
-      // заказ остаётся created: сверка опросит status() через 5/15/30 с (ТЗ §5 п.4)
-      await tx.update(payment).set({ lastError: res.message }).where(eq(payment.id, created.pay.id));
-    } else {
-      await tx.update(payment).set({ status: 'failed', lastError: res.message }).where(eq(payment.id, created.pay.id));
-      await tx.update(paymentOp).set({ status: 'failed' }).where(eq(paymentOp.idempotencyKey, created.idemKey));
+    } else if (res.reason !== 'timeout') {
+      // заказ остаётся created при таймауте: сверка опросит status() (ТЗ §5 п.4)
       await unreserve(tx, created.items.map((i) => i.id));
       await transition(tx, created.o.id, 'created', 'payment_failed', 'system', null, { reason: res.reason });
-      await publish(tx, { topic: 'payment.failed', aggregateType: 'payment', aggregateId: created.pay.id, payload: { order_id: created.o.id, reason: res.reason } });
     }
   });
 
