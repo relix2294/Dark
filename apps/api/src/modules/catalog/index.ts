@@ -3,7 +3,8 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { and, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { CatalogQuery, CatalogResponse, ResolveStoreQuery, ResolveStoreResponse, type Brand } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
-import { deliveryZone, price, product, stockLot, store } from '../../shared/db/schema/index.js';
+import { deliveryZone, dish, price, product, stockLot, stopList, store } from '../../shared/db/schema/index.js';
+import type { Tx } from '../../shared/db/client.js';
 import { AppError } from '../../shared/errors/index.js';
 import { pointInPolygon } from '../../shared/geo.js';
 import { isOpenAt } from './hours.js';
@@ -38,13 +39,29 @@ export async function resolveZone(deps: AppDeps, brand: Brand, geo: { lat: numbe
   return hit;
 }
 
-/** Товары с актуальной ценой на точке и доступным остатком (одним запросом по списку id). */
+/** Блюда SOR, недоступные по стоп-листу: само блюдо или любой ингредиент рецептуры (ТЗ §8). */
+export async function stoppedProductIds(deps: AppDeps, storeId: string, productIds: string[]): Promise<Set<string>> {
+  const stopped = new Set<string>();
+  if (productIds.length === 0) return stopped;
+  const stops = await deps.db.select().from(stopList).where(and(eq(stopList.storeId, storeId), isNull(stopList.clearedAt)));
+  if (stops.length === 0) return stopped;
+  const stopIds = new Set(stops.flatMap((x) => [x.productId, x.ingredientId]).filter((x): x is string => !!x));
+  const dishes = await getDishes(deps.db as unknown as Tx, productIds);
+  for (const id of productIds) {
+    const d = dishes.get(id);
+    if (stopIds.has(id) || d?.recipe.some((i) => stopIds.has(i.product_id))) stopped.add(id);
+  }
+  return stopped;
+}
+
+/** Товары с актуальной ценой на точке и доступным остатком (одним запросом по списку id). SOR: наличие по стоп-листу. */
 export async function priceProducts(deps: AppDeps, storeId: string, productIds: string[]): Promise<Map<string, PricedProduct>> {
   if (productIds.length === 0) return new Map();
   const now = deps.clock.now();
   const rows = await deps.db
     .select({
       id: product.id,
+      brand: product.brand,
       nameRu: product.nameRu,
       isWeighted: product.isWeighted,
       isActive: product.isActive,
@@ -64,7 +81,10 @@ export async function priceProducts(deps: AppDeps, storeId: string, productIds: 
       ),
     )
     .where(inArray(product.id, productIds));
-  return new Map(rows.map((r) => [r.id, r]));
+  const stopped = await stoppedProductIds(deps, storeId, rows.filter((r) => r.brand === 'SOR').map((r) => r.id));
+  return new Map(
+    rows.map((r) => [r.id, r.brand === 'SOR' ? { ...r, available: stopped.has(r.id) ? 0 : Number.MAX_SAFE_INTEGER } : r]),
+  );
 }
 
 export async function registerCatalog(app: FastifyInstance, deps: AppDeps) {
@@ -112,6 +132,7 @@ export async function registerCatalog(app: FastifyInstance, deps: AppDeps) {
         ),
       )
       .limit(500);
+    const stopped = brand === 'SOR' ? await stoppedProductIds(deps, store_id, rows.map((r) => r.product.id)) : new Set<string>();
     return {
       items: rows.map((r) => ({
         product_id: r.product.id,
@@ -125,9 +146,16 @@ export async function registerCatalog(app: FastifyInstance, deps: AppDeps) {
         price_dirams: r.priceDirams,
         old_price_dirams: r.oldPriceDirams,
         // остаток числом не отдаётся — только признак (ТЗ §4); для SOR наличие определяет стоп-лист (этап 1: всегда true)
-        in_stock: brand === 'SOR' ? true : r.available > 0,
+        in_stock: brand === 'SOR' ? !stopped.has(r.product.id) : r.available > 0,
         photo_url: r.product.photoUrl,
       })),
     };
   });
+}
+
+/** Блюда Sor Box по товарам (станция, время готовки, рецептура). */
+export async function getDishes(tx: Tx, productIds: string[]) {
+  if (productIds.length === 0) return new Map<string, typeof dish.$inferSelect>();
+  const rows = await tx.select().from(dish).where(inArray(dish.productId, productIds));
+  return new Map(rows.map((d) => [d.productId, d]));
 }

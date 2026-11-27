@@ -10,6 +10,8 @@ import { DEFAULT_PARAMS } from '../../shared/params/index.js';
 import { getStore, isOpenAt, priceProducts, resolveZone } from '../catalog/index.js';
 import { applyPromo, countUses, findPromo, recordUse } from '../promo/index.js';
 import { reserveForOrder, unreserve } from '../wms/index.js';
+import { enqueueOrder } from '../kds/index.js';
+import { travelMinutes } from '../../shared/geo.js';
 import { priceCart } from './pricing.js';
 import { CUSTOMER_CANCELLABLE, orderMachine } from './state-machine.js';
 
@@ -135,7 +137,7 @@ export async function createOrder(deps: AppDeps, me: CustomerPrincipal, input: C
     const idemKey = `${o!.id}:hold:1`;
     await tx.insert(paymentOp).values({ paymentId: pay!.id, type: 'hold', amountDirams: hold, idempotencyKey: idemKey });
     await publish(tx, { topic: 'order.created', aggregateType: 'order', aggregateId: o!.id, payload: { number, brand: input.brand, store_id: q.store.id } });
-    return { o: o!, items, pay: pay!, idemKey, hold, products: q.products };
+    return { o: o!, items, pay: pay!, idemKey, hold, products: q.products, store: q.store, addr: zoneRow! };
   });
 
   // Шаг 2: вызов банка вне транзакции БД (таймаут PAYMENT_HOLD_TIMEOUT_MS)
@@ -150,6 +152,10 @@ export async function createOrder(deps: AppDeps, me: CustomerPrincipal, input: C
       await tx.update(payment).set({ status: 'held', providerRef: res.providerRef, holdExpiresAt: res.expiresAt }).where(eq(payment.id, created.pay.id));
       await tx.update(paymentOp).set({ status: 'ok' }).where(eq(paymentOp.idempotencyKey, created.idemKey));
       await transition(tx, created.o.id, 'created', 'paid_hold', 'system', null);
+      if (created.o.brand === 'SOR') {
+        const travelMs = travelMinutes(created.store, created.addr, 'bike') * 60_000;
+        await enqueueOrder(tx, deps, created.o, created.items, travelMs);
+      }
       await publish(tx, { topic: 'payment.held', aggregateType: 'payment', aggregateId: created.pay.id, payload: { order_id: created.o.id, amount: created.hold } });
     } else if (res.reason === 'timeout') {
       // заказ остаётся created: сверка опросит status() через 5/15/30 с (ТЗ §5 п.4)

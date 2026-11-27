@@ -28,7 +28,7 @@ import * as svc from './service.js';
 
 export { planReserve, isSellable, type Lot, type ReservePlan } from './reserve.js';
 export { suggestCells, rejectCell, type CellCandidate, type ProductToPlace } from './placement.js';
-export { reserveForOrder, unreserve, reservedByLot, adjustLot } from './stock.js';
+export { reserveForOrder, unreserve, reservedByLot, adjustLot, consumeIngredients } from './stock.js';
 
 export async function registerWms(app: FastifyInstance, deps: AppDeps) {
   const r = app.withTypeProvider<ZodTypeProvider>();

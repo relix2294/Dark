@@ -144,3 +144,23 @@ export async function adjustLot(tx: Tx, lotId: string, qtyFact: number, reason: 
   await tx.update(stockLot).set({ qty: qtyFact }).where(eq(stockLot.id, lotId));
   await tx.insert(stockMove).values({ storeId: lot.storeId, productId: lot.productId, lotId, type: 'adjust', qty: diff, reason, actorId });
 }
+
+/**
+ * Расход ингредиентов кухни по рецептуре (ТЗ §8, этап 1: учёт без резерва). Если партия ингредиента есть —
+ * списываем из неё (не ниже нуля и не трогая резерв), иначе фиксируем расход движением без партии.
+ */
+export async function consumeIngredients(tx: Tx, storeId: string, orderId: string, lines: { productId: string; grams: number }[], actorId: string) {
+  for (const l of lines) {
+    if (l.grams <= 0) continue;
+    const [lot] = await tx
+      .select()
+      .from(stockLot)
+      .where(and(eq(stockLot.storeId, storeId), eq(stockLot.productId, l.productId), sql`${stockLot.qty} - ${stockLot.reservedQty} > 0`))
+      .orderBy(stockLot.expiresAt, stockLot.createdAt)
+      .limit(1)
+      .for('update');
+    const take = lot ? Math.min(l.grams, lot.qty - lot.reservedQty) : 0;
+    if (lot && take > 0) await tx.update(stockLot).set({ qty: sql`${stockLot.qty} - ${take}` }).where(eq(stockLot.id, lot.id));
+    await tx.insert(stockMove).values({ storeId, productId: l.productId, lotId: take > 0 ? lot!.id : null, type: 'write_off', qty: l.grams, refType: 'order', refId: orderId, reason: 'recipe', actorId });
+  }
+}
