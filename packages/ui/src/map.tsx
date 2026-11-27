@@ -40,20 +40,23 @@ export function MapView({
 
   useEffect(() => {
     if (!el.current || map.current) return;
-    const m = L.map(el.current, { zoomControl: true, attributionControl: true }).setView([center.lat, center.lon], zoom);
+    // без анимации масштаба: при переключении вкладки карта удаляется, а таймер анимации падал бы на удалённой карте (_leaflet_pos)
+    const m = L.map(el.current, { zoomControl: true, attributionControl: true, zoomAnimation: false, fadeAnimation: false, markerZoomAnimation: false }).setView([center.lat, center.lon], zoom);
     L.tileLayer(TILES, { maxZoom: 19, attribution: ATTRIBUTION }).addTo(m);
     layer.current = L.layerGroup().addTo(m);
     m.on('click', (e: L.LeafletMouseEvent) => clickRef.current?.({ lat: e.latlng.lat, lon: e.latlng.lng }));
     map.current = m;
     return () => {
+      m.off();
       m.remove();
       map.current = null;
+      layer.current = null;
     };
     // карта создаётся один раз; центр меняется отдельным эффектом
   }, []);
 
   useEffect(() => {
-    if (!fit) map.current?.setView([center.lat, center.lon], map.current.getZoom());
+    if (!fit) map.current?.setView([center.lat, center.lon], map.current.getZoom(), { animate: false });
   }, [center.lat, center.lon, fit]);
 
   useEffect(() => {
@@ -79,7 +82,7 @@ export function MapView({
           .addTo(g);
       }
     }
-    if (fit && bounds.length > 1) map.current.fitBounds(L.latLngBounds(bounds), { padding: [24, 24], maxZoom: 16 });
+    if (fit && bounds.length > 1) map.current.fitBounds(L.latLngBounds(bounds), { padding: [24, 24], maxZoom: 16, animate: false });
   }, [markers, polygons, fit]);
 
   return <div ref={el} className="map" style={{ height }} />;

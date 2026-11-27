@@ -50,7 +50,8 @@ export const orderItem = pgTable(
     status: orderItemStatusEnum('status').notNull().default('pending'),
     replacePolicy: replacePolicyEnum('replace_policy').notNull().default('call'),
     replacedByItemId: uuid('replaced_by_item_id'),
-    modifiers: jsonb('modifiers').$type<Record<string, unknown>>(),
+    /** Снимок выбранных модификаторов: [{group, options:[{name, price_dirams}]}]. */
+    modifiers: jsonb('modifiers').$type<{ group: string; options: { name: string; price_dirams: number }[] }[]>(),
     /** Почему позиция missing/replaced и какое решение принято (call / auto / remove). */
     missingMeta: jsonb('missing_meta').$type<Record<string, unknown>>(),
   },

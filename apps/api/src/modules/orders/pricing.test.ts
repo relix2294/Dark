@@ -10,6 +10,7 @@ const p = (id: string, price: number, available: number, isWeighted = false): Pr
   tempZone: 'ambient',
   priceDirams: price,
   available,
+  modifiersRaw: null,
 });
 
 describe('пересчёт корзины', () => {

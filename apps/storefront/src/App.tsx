@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
-import type { AddressListView, AddressView, Brand, CartResponse, CatalogResponse, OrderListView, OrderView, ResolveStoreResponse } from '@dark/contracts';
+import type { AddressListView, AddressView, Brand, CartResponse, CatalogResponse, DishModifiers, ModifierSelection, OrderListView, OrderView, ResolveStoreResponse } from '@dark/contracts';
 import { ApiError, BRAND_RU, Badge, Button, Card, ErrorBanner, Field, MapView, ORDER_STATUS_RU, Screen, Spinner, createApi, somoni, statusTone, time } from '@dark/ui';
 
 type Address = z.infer<typeof AddressView>;
@@ -11,7 +11,8 @@ type Order = z.infer<typeof OrderView>;
 type Resolve = z.infer<typeof ResolveStoreResponse>;
 
 const api = createApi({ tokenKey: 'dark.store.token' });
-type Line = { product_id: string; qty: number };
+type Line = { product_id: string; qty: number; modifiers?: ModifierSelection };
+type CatalogItem = Catalog['items'][number];
 type Tab = 'shop' | 'orders';
 
 /**
@@ -90,7 +91,17 @@ function Shop({ onLogout }: { onLogout: () => void }) {
   });
 
   const setQty = (id: string, qty: number) => setLines((ls) => (qty <= 0 ? ls.filter((l) => l.product_id !== id) : ls.some((l) => l.product_id === id) ? ls.map((l) => (l.product_id === id ? { ...l, qty } : l)) : [...ls, { product_id: id, qty }]));
-  const qtyOf = (id: string) => lines.find((l) => l.product_id === id)?.qty ?? 0;
+  const qtyOf = (id: string) => lines.filter((l) => l.product_id === id).reduce((a, l) => a + l.qty, 0);
+  // блюдо с модификаторами: каждое «+» — отдельная строка со своим выбором; «−» убирает последнюю
+  const [picking, setPicking] = useState<CatalogItem | null>(null);
+  const plus = (p: CatalogItem) => (p.modifiers ? setPicking(p) : setQty(p.product_id, qtyOf(p.product_id) + (p.is_weighted ? 100 : 1)));
+  const minus = (p: CatalogItem) => {
+    if (!p.modifiers) return setQty(p.product_id, qtyOf(p.product_id) - (p.is_weighted ? 100 : 1));
+    setLines((ls) => {
+      const i = ls.map((l) => l.product_id).lastIndexOf(p.product_id);
+      return i < 0 ? ls : ls.filter((_, j) => j !== i);
+    });
+  };
 
   if (tracking) return <Tracking orderId={tracking} onBack={() => setTracking(null)} />;
 
@@ -131,21 +142,34 @@ function Shop({ onLogout }: { onLogout: () => void }) {
                   <span className="muted">нет в наличии</span>
                 ) : (
                   <div className="row">
-                    <Button onClick={() => setQty(p.product_id, qtyOf(p.product_id) - (p.is_weighted ? 100 : 1))} disabled={qtyOf(p.product_id) === 0}>−</Button>
+                    <Button onClick={() => minus(p)} disabled={qtyOf(p.product_id) === 0}>−</Button>
                     <b>{qtyOf(p.product_id) ? (p.is_weighted ? `${qtyOf(p.product_id)} г` : qtyOf(p.product_id)) : ''}</b>
-                    <Button primary onClick={() => setQty(p.product_id, qtyOf(p.product_id) + (p.is_weighted ? 100 : 1))}>+</Button>
+                    <Button primary onClick={() => plus(p)}>{p.modifiers ? 'Выбрать' : '+'}</Button>
                   </div>
                 )}
               </Card>
             ))}
           </div>
+          {picking?.modifiers && (
+            <ModifierPicker
+              item={picking}
+              def={picking.modifiers}
+              onCancel={() => setPicking(null)}
+              onDone={(modifiers) => {
+                setLines((ls) => [...ls, { product_id: picking.product_id, qty: 1, modifiers }]);
+                setPicking(null);
+              }}
+            />
+          )}
+          {cart.error && <ErrorBanner error={cart.error} />}
           {lines.length > 0 && (
             <Card tone="yellow">
               <h2>Корзина</h2>
-              {cart.data?.lines.map((l) => (
-                <div key={l.product_id} className="row">
+              {cart.data?.lines.map((l, i) => (
+                <div key={i} className="row">
                   <span>
                     {l.name} ×{l.qty} {!l.available && <Badge tone="red">недоступно</Badge>}
+                    {l.modifiers.length > 0 && <div className="muted">{l.modifiers.map((g) => g.options.map((o) => o.name).join(', ')).join(' · ')}</div>}
                   </span>
                   <span>{somoni(l.line_total_dirams)}</span>
                 </div>
@@ -303,6 +327,7 @@ function Tracking({ orderId, onBack }: { orderId: string; onBack: () => void }) 
           <div key={i.id} className="row">
             <span>
               {i.name_snapshot} ×{i.qty_ordered}
+              {i.modifiers && i.modifiers.length > 0 && <span className="muted"> ({i.modifiers.map((g) => g.options.map((o) => o.name).join(', ')).join('; ')})</span>}
               {i.status === 'missing' && <Badge tone="red"> нет</Badge>}
               {i.status === 'replaced' && <Badge tone="yellow"> заменён</Badge>}
             </span>
@@ -345,5 +370,47 @@ function History({ onOpen }: { onOpen: (id: string) => void }) {
         </Card>
       ))}
     </>
+  );
+}
+
+/** Выбор модификаторов блюда: обязательные группы, лимит вариантов, итоговая цена до добавления. */
+function ModifierPicker({ item, def, onDone, onCancel }: { item: CatalogItem; def: DishModifiers; onDone: (m: ModifierSelection) => void; onCancel: () => void }) {
+  const [sel, setSel] = useState<ModifierSelection>(() => Object.fromEntries(def.groups.filter((g) => g.min === 1 && g.max === 1).map((g) => [g.id, [g.options[0]!.id]])));
+  const toggle = (gid: string, oid: string, max: number) =>
+    setSel((s) => {
+      const cur = s[gid] ?? [];
+      if (cur.includes(oid)) return { ...s, [gid]: cur.filter((x) => x !== oid) };
+      if (max === 1) return { ...s, [gid]: [oid] };
+      return cur.length >= max ? s : { ...s, [gid]: [...cur, oid] };
+    });
+  const ok = def.groups.every((g) => (sel[g.id]?.length ?? 0) >= g.min);
+  const extra = def.groups.reduce((a, g) => a + (sel[g.id] ?? []).reduce((b, id) => b + (g.options.find((o) => o.id === id)?.price_dirams ?? 0), 0), 0);
+  return (
+    <div className="modal">
+      <Card>
+        <div className="row">
+          <h2>{item.name_ru}</h2>
+          <Button onClick={onCancel}>✕</Button>
+        </div>
+        {def.groups.map((g) => (
+          <div key={g.id}>
+            <div className="muted">
+              {g.name} {g.min > 0 ? '(обязательно)' : ''} {g.max > 1 ? `— до ${g.max}` : ''}
+            </div>
+            <div className="row" style={{ justifyContent: 'flex-start', flexWrap: 'wrap' }}>
+              {g.options.map((o) => (
+                <Button key={o.id} primary={(sel[g.id] ?? []).includes(o.id)} onClick={() => toggle(g.id, o.id, g.max)}>
+                  {o.name}
+                  {o.price_dirams ? ` +${somoni(o.price_dirams)}` : ''}
+                </Button>
+              ))}
+            </div>
+          </div>
+        ))}
+        <Button big primary disabled={!ok} onClick={() => onDone(sel)}>
+          В корзину · {somoni(item.price_dirams + extra)}
+        </Button>
+      </Card>
+    </div>
   );
 }

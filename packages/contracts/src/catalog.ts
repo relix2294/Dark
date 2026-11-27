@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Brand, TempZone } from './enums.js';
 import { Dirams } from './money.js';
 import { Uuid } from './common.js';
+import { DishModifiers } from './modifiers.js';
 
 export const ResolveStoreQuery = z.object({
   lat: z.coerce.number(),
@@ -39,5 +40,7 @@ export const CatalogItem = z.object({
   old_price_dirams: Dirams.nullable(),
   in_stock: z.boolean(),
   photo_url: z.string().nullable(),
+  /** Только у блюд Sor Box с вариантами. */
+  modifiers: DishModifiers.nullable(),
 });
 export const CatalogResponse = z.object({ items: z.array(CatalogItem) });

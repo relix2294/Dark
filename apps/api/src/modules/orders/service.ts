@@ -114,16 +114,17 @@ export async function createOrder(deps: AppDeps, me: CustomerPrincipal, input: C
     const items = await tx
       .insert(orderItem)
       .values(
-        input.items.map((i) => {
+        input.items.map((i, idx) => {
           const p = q.products.get(i.product_id)!;
+          const line = q.cart.lines[idx]!;
           return {
             orderId: o!.id,
             productId: i.product_id,
             nameSnapshot: p.nameRu,
             qtyOrdered: i.qty,
-            priceDirams: p.priceDirams,
+            priceDirams: line.price_dirams,
             replacePolicy: i.replace_policy,
-            modifiers: i.modifiers ?? null,
+            modifiers: line.modifiers.length ? line.modifiers : null,
           };
         }),
       )
@@ -229,6 +230,7 @@ export async function getOrderView(deps: AppDeps, orderId: string, me: CustomerP
       price_dirams: i.priceDirams,
       status: i.status,
       replaced_by_item_id: i.replacedByItemId,
+      modifiers: i.modifiers ?? null,
     })),
     items_total_dirams: o.itemsTotalDirams,
     delivery_fee_dirams: o.deliveryFeeDirams,

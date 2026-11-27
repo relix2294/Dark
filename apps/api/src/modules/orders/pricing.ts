@@ -1,8 +1,10 @@
-import type { CartResponse } from '@dark/contracts';
+import type { CartResponse, ModifierSelection } from '@dark/contracts';
+import { AppError } from '../../shared/errors/index.js';
+import { applyModifiers, parseDishModifiers } from './modifiers.js';
 import { lineTotal, orderTotal, sum, type Dirams } from '../../shared/money.js';
 import type { PricedProduct } from '../catalog/index.js';
 
-export type CartInputLine = { product_id: string; qty: number };
+export type CartInputLine = { product_id: string; qty: number; modifiers?: ModifierSelection | undefined };
 
 /**
  * Пересчёт корзины — чистая функция (ТЗ §4 PUT /cart). Недоступные позиции не входят в сумму.
@@ -21,17 +23,22 @@ export function priceCart(
     const p = products.get(l.product_id);
     if (!p || !p.isActive) {
       unavailable.push(l.product_id);
-      out.push({ product_id: l.product_id, name: p?.nameRu ?? '—', qty: l.qty, price_dirams: p?.priceDirams ?? 0, line_total_dirams: 0, available: false });
+      out.push({ product_id: l.product_id, name: p?.nameRu ?? '—', qty: l.qty, price_dirams: p?.priceDirams ?? 0, modifiers: [], line_total_dirams: 0, available: false });
       continue;
     }
+    // модификаторы: проверка выбора и доплата к цене единицы (цена с клиента не принимается)
+    const mod = applyModifiers(parseDishModifiers(p.modifiersRaw), l.modifiers);
+    if ('error' in mod) throw new AppError('VALIDATION', `${p.nameRu}: ${mod.error}`, { product_id: p.id });
+    const unit = p.priceDirams + mod.extra;
     const available = p.available >= l.qty;
     if (!available) unavailable.push(l.product_id);
     out.push({
       product_id: p.id,
       name: p.nameRu,
       qty: l.qty,
-      price_dirams: p.priceDirams,
-      line_total_dirams: available ? lineTotal(p.priceDirams, l.qty, p.isWeighted) : 0,
+      price_dirams: unit,
+      modifiers: mod.snapshot,
+      line_total_dirams: available ? lineTotal(unit, l.qty, p.isWeighted) : 0,
       available,
     });
   }

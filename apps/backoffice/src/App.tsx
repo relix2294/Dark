@@ -13,13 +13,15 @@ import { Staff } from './Staff.js';
 import { Warehouse } from './Warehouse.js';
 import { Plan } from './Plan.js';
 import { Reports } from './Reports.js';
+import { Import } from './Import.js';
 
-type Tab = 'console' | 'catalog' | 'warehouse' | 'zones' | 'promo' | 'staff' | 'plan' | 'reports' | 'params' | 'audit';
+type Tab = 'console' | 'catalog' | 'import' | 'warehouse' | 'zones' | 'promo' | 'staff' | 'plan' | 'reports' | 'params' | 'audit';
 
 /** Вкладки по ролям — по матрице прав ТЗ §9 (сервер всё равно проверяет каждый запрос). */
 const TABS: { id: Tab; title: string; roles: StaffRole[] }[] = [
   { id: 'console', title: 'Пульт', roles: ['shift_lead', 'manager'] },
   { id: 'catalog', title: 'Каталог', roles: ['manager', 'admin'] },
+  { id: 'import', title: 'Импорт', roles: ['manager', 'admin'] },
   { id: 'warehouse', title: 'Склад', roles: ['shift_lead', 'manager', 'admin'] },
   { id: 'zones', title: 'Зоны', roles: ['manager', 'admin'] },
   { id: 'promo', title: 'Промо', roles: ['manager', 'admin'] },
@@ -85,6 +87,7 @@ export function App() {
         {
           console: <Console storeId={store} storeGeo={stores.data?.stores.find((x) => x.id === store)?.geo ?? null} />,
           catalog: <Catalog storeId={store} />,
+          import: <Import storeId={store} />,
           warehouse: <Warehouse storeId={store} />,
           zones: <Zones storeId={store} storeGeo={stores.data?.stores.find((x) => x.id === store)?.geo ?? null} />,
           promo: <Promos />,

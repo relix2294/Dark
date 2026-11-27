@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Geo, Uuid } from './common.js';
 import { Brand, PromoAudience, PromoType, StaffRole, Station, TempZone, Transport } from './enums.js';
 import { Dirams } from './money.js';
+import { DishModifiers } from './modifiers.js';
 
 /** Админка (ТЗ §9): каталог, цены, зоны, промо, персонал, склад, график курьеров, отчёты. */
 
@@ -55,7 +56,7 @@ export const PriceView = z.object({ store_id: Uuid, price_dirams: Dirams, old_pr
 export const DishView = z.object({
   station: Station,
   cook_time_sec: z.number().int().min(1),
-  modifiers: z.record(z.string(), z.unknown()),
+  modifiers: DishModifiers,
   recipe: z.array(z.object({ product_id: Uuid, grams: z.number().int().min(1) })),
 });
 export const ProductView = ProductInput.extend({ id: Uuid, barcodes: z.array(z.string()), prices: z.array(PriceView), dish: DishView.nullable() });
@@ -193,4 +194,39 @@ export const MoneyReport = z.object({
   payments_by_status: z.record(z.string(), z.object({ count: z.number().int(), dirams: Dirams })),
   pending_over_5min: z.array(z.object({ payment_id: Uuid, order_id: Uuid, status: z.string(), since: z.iso.datetime(), last_error: z.string().nullable() })),
   failed_ops: z.array(z.object({ payment_id: Uuid, type: z.string(), amount_dirams: Dirams, key: z.string(), at: z.iso.datetime() })),
+});
+
+// ---------- импорт каталога ----------
+/** Строка импорта (CSV разбирается на клиенте). Ключ — бренд + артикул: есть — обновляем, нет — создаём. */
+export const ImportRow = z.object({
+  sku: z.string().min(1).max(40),
+  name_ru: z.string().min(1).max(200),
+  name_tj: z.string().max(200).optional(),
+  category: z.string().max(100).optional(),
+  barcodes: z.array(z.string().min(3).max(40)).default([]),
+  unit: z.string().max(10).optional(),
+  temp_zone: TempZone.optional(),
+  is_weighted: z.boolean().optional(),
+  is_high_value: z.boolean().optional(),
+  shelf_life_days: z.number().int().min(0).nullable().optional(),
+  /** Цена на выбранной точке; пусто — цену не трогаем. */
+  price_dirams: Dirams.min(1).optional(),
+  is_active: z.boolean().optional(),
+});
+export const ImportRequest = z.object({
+  brand: Brand,
+  store_id: Uuid,
+  rows: z.array(z.unknown()).min(1).max(5000),
+  /** true — только проверить и показать, что изменится. */
+  dry_run: z.boolean().default(true),
+  reason: z.string().min(1).max(200),
+});
+export const ImportResult = z.object({
+  dry_run: z.boolean(),
+  applied: z.boolean(),
+  created: z.number().int(),
+  updated: z.number().int(),
+  prices_changed: z.number().int(),
+  categories_created: z.array(z.string()),
+  errors: z.array(z.object({ row: z.number().int(), message: z.string() })),
 });

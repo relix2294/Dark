@@ -26,7 +26,7 @@ import { registerCatalog } from './modules/catalog/index.js';
 import { registerOrders } from './modules/orders/index.js';
 import { registerCustomers } from './modules/customers/index.js';
 import { registerBackoffice, registerReports } from './modules/backoffice/index.js';
-import { registerCatalogAdmin } from './modules/catalog/index.js';
+import { registerCatalogAdmin, registerCatalogImport } from './modules/catalog/index.js';
 import { registerPromoAdmin } from './modules/promo/index.js';
 import { isStaffActive, registerStaffAdmin } from './modules/customers/index.js';
 import { registerWmsAdmin } from './modules/wms/index.js';
@@ -125,6 +125,7 @@ export async function buildApp(deps: AppDeps) {
       await registerBackoffice(api, deps);
       // админка
       await registerCatalogAdmin(api, deps);
+      await registerCatalogImport(api, deps);
       await registerPromoAdmin(api, deps);
       await registerStaffAdmin(api, deps);
       await registerWmsAdmin(api, deps);

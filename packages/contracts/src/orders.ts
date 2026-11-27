@@ -2,12 +2,13 @@ import { z } from 'zod';
 import { Brand, OrderItemStatus, OrderStatus, ReplacePolicy } from './enums.js';
 import { Dirams, Qty } from './money.js';
 import { Geo, Uuid } from './common.js';
+import { ModifierSelection, ModifierSnapshot } from './modifiers.js';
 
 export const CartItemInput = z.object({
   product_id: Uuid,
   qty: Qty.min(1),
   replace_policy: ReplacePolicy.default('call'),
-  modifiers: z.record(z.string(), z.unknown()).optional(),
+  modifiers: ModifierSelection.optional(),
 });
 
 export const CartRequest = z.object({
@@ -22,7 +23,9 @@ export const CartLine = z.object({
   product_id: Uuid,
   name: z.string(),
   qty: Qty,
+  /** Цена за единицу с учётом модификаторов. */
   price_dirams: Dirams,
+  modifiers: ModifierSnapshot,
   line_total_dirams: Dirams,
   available: z.boolean(),
 });
@@ -57,6 +60,7 @@ export const OrderItemView = z.object({
   price_dirams: Dirams,
   status: OrderItemStatus,
   replaced_by_item_id: Uuid.nullable(),
+  modifiers: ModifierSnapshot.nullable(),
 });
 
 export const CourierView = z.object({

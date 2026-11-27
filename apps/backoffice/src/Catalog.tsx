@@ -128,6 +128,21 @@ function ProductEditor({ storeId, brand, product, categories, onClose }: { store
     },
     onSuccess: onClose,
   });
+  const [dish, setDish] = useState({
+    station: product?.dish?.station ?? 'pizza',
+    cook_min: String((product?.dish?.cook_time_sec ?? 600) / 60),
+    modifiers: JSON.stringify(product?.dish?.modifiers ?? { groups: [] }, null, 1),
+  });
+  const saveDish = useMutation({
+    mutationFn: () =>
+      api.put(`/admin/products/${product!.id}/dish`, {
+        station: dish.station,
+        cook_time_sec: Math.round(Number(dish.cook_min) * 60),
+        modifiers: JSON.parse(dish.modifiers) as unknown,
+        recipe: product?.dish?.recipe ?? [],
+      }),
+    onSuccess: onClose,
+  });
   const addCat = useMutation({ mutationFn: () => api.post<{ id: string }>('/admin/categories', { brand, name: newCat }), onSuccess: (c) => setF({ ...f, category_id: c.id }) });
 
   return (
@@ -199,6 +214,31 @@ function ProductEditor({ storeId, brand, product, categories, onClose }: { store
         <Button primary disabled={!f.sku || !f.name_ru || save.isPending} onClick={() => save.mutate()}>
           Сохранить
         </Button>
+        {brand === 'SOR' && product && (
+          <>
+            <h2>Блюдо</h2>
+            <ErrorBanner error={saveDish.error} />
+            <div className="grid">
+              <Field label="Станция">
+                <select className="input" value={dish.station} onChange={(e) => setDish({ ...dish, station: e.target.value as typeof dish.station })}>
+                  <option value="pizza">пицца</option>
+                  <option value="grill">гриль</option>
+                  <option value="cold">холодный цех</option>
+                  <option value="pack">упаковка</option>
+                </select>
+              </Field>
+              <Field label="Время готовки, мин">
+                <input className="input" value={dish.cook_min} onChange={(e) => setDish({ ...dish, cook_min: e.target.value })} />
+              </Field>
+            </div>
+            <Field label='Модификаторы: {"groups":[{"id","name","min","max","options":[{"id","name","price_dirams"}]}]}'>
+              <textarea className="input" rows={6} value={dish.modifiers} onChange={(e) => setDish({ ...dish, modifiers: e.target.value })} />
+            </Field>
+            <Button disabled={saveDish.isPending} onClick={() => saveDish.mutate()}>
+              Сохранить блюдо
+            </Button>
+          </>
+        )}
       </Card>
     </div>
   );

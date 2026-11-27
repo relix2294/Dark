@@ -31,7 +31,18 @@ beforeAll(async () => {
     { productId: salad.id, storeId: w.store.id, priceDirams: 3900, validFrom: new Date('2026-01-01') },
   ]);
   await db.insert(s.dish).values([
-    { productId: pizza.id, station: 'pizza', cookTimeSec: 900, recipe: [{ product_id: cheese.id, grams: 120 }] },
+    {
+      productId: pizza.id,
+      station: 'pizza',
+      cookTimeSec: 900,
+      recipe: [{ product_id: cheese.id, grams: 120 }],
+      modifiers: {
+        groups: [
+          { id: 'size', name: 'Размер', min: 1, max: 1, options: [{ id: '25', name: '25 см', price_dirams: 0 }, { id: '30', name: '30 см', price_dirams: 1500 }] },
+          { id: 'add', name: 'Добавки', min: 0, max: 2, options: [{ id: 'cheese', name: 'Сыр', price_dirams: 500 }, { id: 'mush', name: 'Грибы', price_dirams: 400 }] },
+        ],
+      },
+    },
     { productId: salad.id, station: 'cold', cookTimeSec: 240 },
   ]);
   await db.insert(s.stockLot).values({ storeId: w.store.id, productId: cheese.id, qty: 1000 });
@@ -56,13 +67,24 @@ describe('кухня (ТЗ §8)', () => {
     expect((await call('GET', '/api/v1/kds/stop-list', cook)).json()).toEqual({ product_ids: [], ingredient_ids: [] });
   });
 
+  it('модификаторы: обязательный размер, доплата считается сервером, каталог отдаёт группы', async () => {
+    const cat = (await call('GET', `/api/v1/catalog?store_id=${w.store.id}&brand=SOR`, w.token)).json();
+    expect(cat.items.find((i: any) => i.product_id === pizza.id).modifiers.groups.map((g: any) => g.id)).toEqual(['size', 'add']);
+    expect(cat.items.find((i: any) => i.product_id === salad.id).modifiers).toBeNull();
+    const noSize = await call('PUT', '/api/v1/cart', w.token, { brand: 'SOR', store_id: w.store.id, items: [{ product_id: pizza.id, qty: 1 }] });
+    expect(noSize.statusCode).toBe(400);
+    expect(noSize.json().error.message).toContain('Размер');
+    const ok = (await call('PUT', '/api/v1/cart', w.token, { brand: 'SOR', store_id: w.store.id, items: [{ product_id: pizza.id, qty: 2, modifiers: { size: ['30'], add: ['cheese'] } }] })).json();
+    expect(ok.lines[0]).toMatchObject({ price_dirams: 8500, line_total_dirams: 17000, modifiers: [{ group: 'Размер' }, { group: 'Добавки' }] });
+  });
+
   it('заказ → раскладка: салат стартует позже пиццы; старт → cooking; упаковка → ready и расход сыра', async () => {
     const r = await call('POST', '/api/v1/orders', w.token, {
       brand: 'SOR',
       store_id: w.store.id,
       address_id: w.addr.id,
-      items: [{ product_id: pizza.id, qty: 1 }, { product_id: salad.id, qty: 1 }],
-      expected_total_dirams: 6500 + 3900 + 1500,
+      items: [{ product_id: pizza.id, qty: 1, modifiers: { size: ['30'] } }, { product_id: salad.id, qty: 1 }],
+      expected_total_dirams: 6500 + 1500 + 3900 + 1500,
     });
     expect(r.statusCode, r.body).toBe(201);
     const o = r.json();
@@ -78,7 +100,8 @@ describe('кухня (ТЗ §8)', () => {
 
     const q = (await call('GET', '/api/v1/kds/queue?station=pizza', cook)).json();
     expect(q.items).toHaveLength(1);
-    expect(q.items[0]).toMatchObject({ order_number: o.number, name: 'Пицца Маргарита', color: 'yellow' });
+    expect(q.items[0]).toMatchObject({ order_number: o.number, name: 'Пицца Маргарита', color: 'yellow', modifiers: [{ group: 'Размер', options: [{ name: '30 см', price_dirams: 1500 }] }] });
+    expect(o.items.find((i: any) => i.product_id === pizza.id)).toMatchObject({ price_dirams: 8000 });
     const qc = (await call('GET', '/api/v1/kds/queue?station=cold', cook)).json();
     expect(qc.items[0].color).toBe('grey'); // до времени старта
 

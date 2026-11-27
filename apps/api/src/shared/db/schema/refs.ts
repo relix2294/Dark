@@ -85,7 +85,7 @@ export const dish = pgTable('dish', {
   productId: uuid('product_id').notNull().unique().references(() => product.id),
   station: stationEnum('station').notNull(),
   cookTimeSec: integer('cook_time_sec').notNull(),
-  modifiers: jsonb('modifiers').$type<Record<string, unknown>>().notNull().default({}),
+  modifiers: jsonb('modifiers').$type<unknown>().notNull().default({}),
   /** [{product_id, grams}] — рецептура для списания при ready */
   recipe: jsonb('recipe').$type<{ product_id: string; grams: number }[]>().notNull().default([]),
 });

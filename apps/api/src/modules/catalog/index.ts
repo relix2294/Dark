@@ -8,9 +8,11 @@ import type { Tx } from '../../shared/db/client.js';
 import { AppError } from '../../shared/errors/index.js';
 import { pointInPolygon } from '../../shared/geo.js';
 import { isOpenAt } from './hours.js';
+import { DishModifiers } from '@dark/contracts';
 
 export { isOpenAt } from './hours.js';
 export { registerCatalogAdmin } from './admin.js';
+export { registerCatalogImport } from './import.js';
 
 /** Публичный интерфейс модуля catalog для orders/cart. */
 export type PricedProduct = {
@@ -21,6 +23,8 @@ export type PricedProduct = {
   tempZone: 'ambient' | 'chill' | 'frozen';
   priceDirams: number;
   available: number; // доступно к резерву
+  /** Определение модификаторов блюда (сырое из БД — разбирает orders). */
+  modifiersRaw: unknown;
 };
 
 export async function getStore(deps: AppDeps, storeId: string) {
@@ -82,9 +86,16 @@ export async function priceProducts(deps: AppDeps, storeId: string, productIds: 
       ),
     )
     .where(inArray(product.id, productIds));
-  const stopped = await stoppedProductIds(deps, storeId, rows.filter((r) => r.brand === 'SOR').map((r) => r.id));
+  const sorIds = rows.filter((r) => r.brand === 'SOR').map((r) => r.id);
+  const stopped = await stoppedProductIds(deps, storeId, sorIds);
+  const dishes = await getDishes(deps.db as unknown as Tx, sorIds);
   return new Map(
-    rows.map((r) => [r.id, r.brand === 'SOR' ? { ...r, available: stopped.has(r.id) ? 0 : Number.MAX_SAFE_INTEGER } : r]),
+    rows.map((r) => [
+      r.id,
+      r.brand === 'SOR'
+        ? { ...r, available: stopped.has(r.id) ? 0 : Number.MAX_SAFE_INTEGER, modifiersRaw: dishes.get(r.id)?.modifiers ?? null }
+        : { ...r, modifiersRaw: null },
+    ]),
   );
 }
 
@@ -134,6 +145,7 @@ export async function registerCatalog(app: FastifyInstance, deps: AppDeps) {
       )
       .limit(500);
     const stopped = brand === 'SOR' ? await stoppedProductIds(deps, store_id, rows.map((r) => r.product.id)) : new Set<string>();
+    const dishes = brand === 'SOR' ? await getDishes(deps.db as unknown as Tx, rows.map((r) => r.product.id)) : new Map();
     return {
       items: rows.map((r) => ({
         product_id: r.product.id,
@@ -149,6 +161,7 @@ export async function registerCatalog(app: FastifyInstance, deps: AppDeps) {
         // остаток числом не отдаётся — только признак (ТЗ §4); для SOR наличие определяет стоп-лист (этап 1: всегда true)
         in_stock: brand === 'SOR' ? !stopped.has(r.product.id) : r.available > 0,
         photo_url: r.product.photoUrl,
+        modifiers: dishModifiersOrNull(dishes.get(r.product.id)?.modifiers),
       })),
     };
   });
@@ -159,4 +172,9 @@ export async function getDishes(tx: Tx, productIds: string[]) {
   if (productIds.length === 0) return new Map<string, typeof dish.$inferSelect>();
   const rows = await tx.select().from(dish).where(inArray(dish.productId, productIds));
   return new Map(rows.map((d) => [d.productId, d]));
+}
+
+function dishModifiersOrNull(raw: unknown) {
+  const r = DishModifiers.safeParse(raw ?? {});
+  return r.success && r.data.groups.length ? r.data : null;
 }

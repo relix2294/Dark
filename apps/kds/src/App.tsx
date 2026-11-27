@@ -72,7 +72,11 @@ function StationQueue({ station }: { station: Station }) {
             <div className="muted">
               Заказ {i.order_number} · старт {time(i.start_at)} · готовность {time(i.target_ready_at)} ({minutesLeft(i.target_ready_at)})
             </div>
-            {i.modifiers && Object.keys(i.modifiers).length > 0 && <div>{Object.entries(i.modifiers).map(([k, v]) => `${k}: ${String(v)}`).join(', ')}</div>}
+            {i.modifiers && i.modifiers.length > 0 && (
+              <div className="big" style={{ fontSize: 18 }}>
+                {i.modifiers.map((g) => `${g.group}: ${g.options.map((o) => o.name).join(', ')}`).join(' · ')}
+              </div>
+            )}
             {!i.started_at && (
               <Button big primary={i.color !== 'grey'} disabled={act.isPending} onClick={() => act.mutate({ id: i.id, action: 'start' })}>
                 {i.color === 'grey' ? 'Начать раньше' : 'Начать'}
@@ -116,6 +120,7 @@ function PackScreen() {
               <div key={i.id} className="row">
                 <span>
                   {i.name} ×{i.qty}
+                  {i.modifiers && i.modifiers.length > 0 && <span className="muted"> · {i.modifiers.map((g) => g.options.map((o) => o.name).join(', ')).join('; ')}</span>}
                 </span>
                 <Badge tone={i.done_at ? 'green' : i.color === 'red' ? 'red' : 'yellow'}>{i.done_at ? 'готово' : i.started_at ? 'в работе' : 'ждёт'}</Badge>
               </div>

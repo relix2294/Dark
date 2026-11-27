@@ -64,7 +64,17 @@ await db.transaction(async (tx) => {
     { productId: by('SOR-0002').id, storeId: store!.id, priceDirams: 3900 },
   ]);
   await tx.insert(s.dish).values([
-    { productId: by('SOR-0001').id, station: 'pizza', cookTimeSec: 900 },
+    {
+      productId: by('SOR-0001').id,
+      station: 'pizza',
+      cookTimeSec: 900,
+      modifiers: {
+        groups: [
+          { id: 'size', name: 'Размер', min: 1, max: 1, options: [{ id: '25', name: '25 см', price_dirams: 0 }, { id: '30', name: '30 см', price_dirams: 1500 }, { id: '35', name: '35 см', price_dirams: 2800 }] },
+          { id: 'add', name: 'Добавки', min: 0, max: 3, options: [{ id: 'cheese', name: 'Сыр', price_dirams: 500 }, { id: 'mush', name: 'Грибы', price_dirams: 400 }, { id: 'hot', name: 'Халапеньо', price_dirams: 300 }] },
+        ],
+      },
+    },
     { productId: by('SOR-0002').id, station: 'cold', cookTimeSec: 240 },
   ]);
 

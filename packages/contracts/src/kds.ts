@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Station } from './enums.js';
 import { Uuid } from './common.js';
+import { ModifierSnapshot } from './modifiers.js';
 
 export const KdsQueueQuery = z.object({ station: Station });
 export const KdsItemIdParams = z.object({ id: Uuid });
@@ -20,7 +21,7 @@ export const KdsItemView = z.object({
   order_number: z.string(),
   name: z.string(),
   qty: z.number().int(),
-  modifiers: z.record(z.string(), z.unknown()).nullable(),
+  modifiers: ModifierSnapshot.nullable(),
   station: Station,
   cook_time_sec: z.number().int(),
   start_at: z.iso.datetime(),

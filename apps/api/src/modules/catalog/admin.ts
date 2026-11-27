@@ -3,6 +3,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 import {
   CategoryInput,
+  DishModifiers,
   CategoryListView,
   CategoryQuery,
   CategoryView,
@@ -91,7 +92,7 @@ async function productViews(tx: Tx, rows: (typeof product.$inferSelect)[], now: 
       prices: prices
         .filter((x) => x.productId === p.id)
         .map((x) => ({ store_id: x.storeId, price_dirams: x.priceDirams, old_price_dirams: x.oldPriceDirams, valid_from: x.validFrom.toISOString() })),
-      dish: d ? { station: d.station, cook_time_sec: d.cookTimeSec, modifiers: d.modifiers, recipe: d.recipe } : null,
+      dish: d ? { station: d.station, cook_time_sec: d.cookTimeSec, modifiers: DishModifiers.safeParse(d.modifiers ?? {}).data ?? { groups: [] }, recipe: d.recipe } : null,
     };
   });
 }
