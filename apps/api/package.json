@@ -17,6 +17,7 @@
     "db:seed": "tsx src/shared/db/seed.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1178.0",
     "@dark/contracts": "workspace:*",
     "@fastify/cors": "^11.0.0",
     "@fastify/sensible": "^6.0.0",

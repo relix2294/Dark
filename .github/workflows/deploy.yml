@@ -1,0 +1,141 @@
+name: Deploy Dark to VPS
+
+# Деплой ВРУЧНУЮ: Actions → «Deploy Dark to VPS» → Run workflow. Не на каждый push.
+#
+# Что делает:
+# 1. собирает фронты (deploy/www);
+# 2. заливает репозиторий в /opt/dark (deploy/.env, данные и фото на сервере НЕ трогает);
+# 3. при первом запуске создаёт deploy/.env со случайными паролями (в git и логи они не попадают);
+# 4. проверяет, что порты Dark свободны или уже заняты самим Dark — чужие сервисы (Kassa, Marzban) не трогаем;
+# 5. поднимает ТОЛЬКО стек «dark» (docker compose project dark) и ждёт /health.
+#
+# Секреты репозитория (Settings → Secrets and variables → Actions):
+#   VPS_HOST — IP сервера; VPS_USER — пользователь SSH (root или с правами docker);
+#   VPS_SSH_KEY — приватный ключ (предпочтительно) ИЛИ VPS_PASSWORD — пароль.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Ветка или тег'
+        required: true
+        default: main
+      site_address:
+        description: 'Первый запуск: домен (dark.example.tj) или :80 — без домена'
+        required: true
+        default: ':80'
+      http_port:
+        description: 'Первый запуск: внешний HTTP-порт (80 для домена)'
+        required: true
+        default: '8090'
+
+concurrency:
+  group: deploy-dark
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Сборка фронтов
+        run: pnpm build:web
+
+      - name: Доступ по SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_PASSWORD: ${{ secrets.VPS_PASSWORD }}
+        run: |
+          test -n "$VPS_HOST" || { echo "Нет секрета VPS_HOST"; exit 1; }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -H "$(printf '%s' "$VPS_HOST" | tr -d '[:space:]')" >> ~/.ssh/known_hosts 2>/dev/null
+          if [ -n "$VPS_SSH_KEY" ]; then
+            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_dark && chmod 600 ~/.ssh/id_dark
+            echo "SSH_CMD=ssh -i $HOME/.ssh/id_dark -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
+          elif [ -n "$VPS_PASSWORD" ]; then
+            sudo apt-get install -y sshpass >/dev/null
+            echo "SSHPASS=$(printf '%s' "$VPS_PASSWORD" | tr -d '\r\n')" >> "$GITHUB_ENV"
+            echo "SSH_CMD=sshpass -e ssh -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
+          else
+            echo "Нужен секрет VPS_SSH_KEY или VPS_PASSWORD"; exit 1
+          fi
+          echo "TARGET=$(printf '%s' "${{ secrets.VPS_USER }}" | tr -d '[:space:]')@$(printf '%s' "$VPS_HOST" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+
+      - name: Залить код в /opt/dark (deploy/.env и deploy/data не трогаем)
+        run: |
+          $SSH_CMD "$TARGET" 'mkdir -p /opt/dark'
+          rsync -az --delete \
+            --exclude '.git' --exclude 'node_modules' --exclude '.turbo' --exclude 'dist' \
+            --exclude 'deploy/.env' --exclude 'deploy/data' \
+            -e "$SSH_CMD" ./ "$TARGET:/opt/dark/"
+
+      - name: Первый запуск — deploy/.env со случайными паролями
+        run: |
+          $SSH_CMD "$TARGET" "SITE='${{ inputs.site_address }}' HPORT='${{ inputs.http_port }}' bash -s" <<'REMOTE'
+          set -e
+          cd /opt/dark/deploy
+          if [ ! -f .env ]; then
+            umask 077
+            {
+              echo "SITE_ADDRESS=$SITE"
+              echo "HTTP_PORT=$HPORT"
+              echo "HTTPS_PORT=$([ "$HPORT" = 80 ] && echo 443 || echo 8453)"
+              echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)"
+              echo "JWT_SECRET=$(openssl rand -hex 32)"
+              echo "METRICS_TOKEN=$(openssl rand -hex 16)"
+              echo "PAYMENT_PROVIDER=stub"
+              echo "STORAGE_DRIVER=local"
+            } > .env
+            echo "deploy/.env создан"
+          else
+            echo "deploy/.env уже есть — не трогаю"
+          fi
+          mkdir -p data/uploads data/pg data/caddy
+          chown 1000:1000 data/uploads   # API в контейнере работает от пользователя node (uid 1000)
+          REMOTE
+
+      - name: Проверка портов — не мешаем Kassa и Marzban
+        run: |
+          $SSH_CMD "$TARGET" 'bash -s' <<'REMOTE'
+          set -e
+          cd /opt/dark/deploy
+          set -a; . ./.env; set +a
+          for p in "${HTTP_PORT:-8090}" "${HTTPS_PORT:-8453}"; do
+            owner=$(docker ps --format '{{.Names}} {{.Ports}}' | grep -E "(0\.0\.0\.0|\[::\]):$p->" | awk '{print $1}' | head -1)
+            if [ -n "$owner" ] && ! printf '%s' "$owner" | grep -q '^dark-'; then
+              echo "Порт $p занят контейнером $owner — поменяйте HTTP_PORT/HTTPS_PORT в /opt/dark/deploy/.env"; exit 1
+            fi
+            if [ -z "$owner" ] && ss -ltnH "sport = :$p" | grep -q .; then
+              echo "Порт $p занят процессом вне Docker — поменяйте HTTP_PORT/HTTPS_PORT в /opt/dark/deploy/.env"; exit 1
+            fi
+          done
+          echo "Порты свободны или принадлежат Dark"
+          REMOTE
+
+      - name: Поднять ТОЛЬКО стек dark
+        run: |
+          $SSH_CMD "$TARGET" 'bash -s' <<'REMOTE'
+          set -e
+          cd /opt/dark/deploy
+          docker compose -p dark up -d --build --remove-orphans
+          for i in $(seq 1 30); do
+            code=$(docker compose -p dark exec -T api wget -qO- http://127.0.0.1:3000/health >/dev/null 2>&1 && echo ok || echo no)
+            [ "$code" = ok ] && break
+            sleep 2
+          done
+          docker compose -p dark ps
+          test "$code" = ok || { docker compose -p dark logs --tail=80 api migrate; exit 1; }
+          echo "--- все контейнеры сервера (Kassa и Marzban должны быть на месте) ---"
+          docker ps --format '{{.Names}}\t{{.Status}}'
+          set -a; . ./.env; set +a
+          echo "Готово: ${SITE_ADDRESS} (HTTP-порт ${HTTP_PORT})"
+          REMOTE

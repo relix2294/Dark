@@ -36,7 +36,10 @@ export function defineAppConfig(o: { name: string; title: string; base: string; 
     ],
     server: {
       port: o.port,
-      proxy: { '/api': { target: process.env['API_URL'] ?? 'http://127.0.0.1:3000', changeOrigin: true, ws: true } },
+      proxy: {
+        '/api': { target: process.env['API_URL'] ?? 'http://127.0.0.1:3000', changeOrigin: true, ws: true },
+        '/media': { target: process.env['API_URL'] ?? 'http://127.0.0.1:3000', changeOrigin: true },
+      },
     },
     build: { outDir: 'dist', sourcemap: true, target: 'es2022' },
   });

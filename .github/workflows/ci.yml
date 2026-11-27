@@ -49,6 +49,20 @@ jobs:
         env:
           DATABASE_URL: postgres://dark:dark@127.0.0.1:5432/dark_test
 
+  deploy-config:
+    name: Конфиги деплоя (Caddyfile, compose)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Caddyfile разбирается официальным Caddy (без домена и с доменом)
+        run: |
+          for site in ':80' 'dark.example.tj'; do
+            docker run --rm -e SITE_ADDRESS="$site" -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2-alpine \
+              caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
+          done
+      - name: docker compose config с примером .env
+        run: cd deploy && cp .env.example .env && docker compose config --quiet
+
   image:
     name: Docker-образ api
     needs: check

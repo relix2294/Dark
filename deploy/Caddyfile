@@ -1,5 +1,6 @@
-# TLS автоматически (Let's Encrypt). /api и /docs → api, остальное — статика фронтов из deploy/www/<app>
-{$DOMAIN} {
+# SITE_ADDRESS: домен (dark.example.tj) — автоматический HTTPS (нужны свободные 80/443);
+# :80 — без домена, по IP и порту HTTP_PORT. /api и /docs → api, /media — фото, остальное — фронты из deploy/www/<app>.
+{$SITE_ADDRESS} {
 	encode zstd gzip
 
 	handle /api/* {
@@ -10,6 +11,13 @@
 	}
 	handle /health {
 		reverse_proxy api:3000
+	}
+
+	# фото товаров с тома (STORAGE_DRIVER=local); имена файлов — хэш содержимого, кэш навсегда
+	handle_path /media/* {
+		root * /srv/media
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
 	}
 
 	# Фронты: /store (витрина), /office (админка + пульт), /kds (кухня), /picker (терминал). SPA fallback.

@@ -16,6 +16,7 @@ import { createDb, type Db } from './shared/db/client.js';
 import { AppError } from './shared/errors/index.js';
 import { loggerOptions } from './shared/logger.js';
 import { registerMetrics } from './shared/metrics.js';
+import { localStorage as localDisk, s3Storage, type Storage } from './shared/storage.js';
 import { TokenService } from './shared/auth/index.js';
 import { authPlugin } from './shared/auth/plugin.js';
 import { idempotencyPlugin } from './shared/idempotency/plugin.js';
@@ -43,6 +44,7 @@ export type AppDeps = {
   clock: Clock;
   tokens: TokenService;
   wallet: WalletAdapter;
+  storage: Storage;
 };
 
 export function createDeps(config: Config, over: Partial<AppDeps> = {}): AppDeps & { close: () => Promise<void> } {
@@ -54,8 +56,17 @@ export function createDeps(config: Config, over: Partial<AppDeps> = {}): AppDeps
     clock,
     tokens: over.tokens ?? new TokenService(config.JWT_SECRET),
     wallet: over.wallet ?? new StubWalletAdapter(clock),
+    storage: over.storage ?? createStorage(config),
     close,
   };
+}
+
+function createStorage(c: Config): Storage {
+  if (c.STORAGE_DRIVER === 's3') {
+    if (!c.S3_BUCKET || !c.S3_ACCESS_KEY_ID || !c.S3_SECRET_ACCESS_KEY) throw new Error('STORAGE_DRIVER=s3: нужны S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY');
+    return s3Storage({ endpoint: c.S3_ENDPOINT, region: c.S3_REGION, bucket: c.S3_BUCKET, publicBase: c.MEDIA_PUBLIC_URL, accessKeyId: c.S3_ACCESS_KEY_ID, secretAccessKey: c.S3_SECRET_ACCESS_KEY });
+  }
+  return localDisk(c.UPLOAD_DIR, c.MEDIA_PUBLIC_URL);
 }
 
 export async function buildApp(deps: AppDeps) {
@@ -113,6 +124,16 @@ export async function buildApp(deps: AppDeps) {
 
   app.get('/health', { config: { idempotency: false } }, async () => ({ ok: true, at: deps.clock.now().toISOString() }));
   registerMetrics(app, deps.db, deps.config.METRICS_TOKEN);
+  // локальное хранилище в разработке раздаёт API; в проде /media отдаёт Caddy прямо с тома
+  if (deps.storage.read) {
+    app.get('/media/*', { config: { idempotency: false }, schema: { hide: true } }, async (req, reply) => {
+      const key = (req.params as { '*': string })['*'];
+      const bytes = await deps.storage.read!(key);
+      if (!bytes) return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Файл не найден' } });
+      const type = key.endsWith('.png') ? 'image/png' : key.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
+      return reply.type(type).header('cache-control', 'public, max-age=31536000, immutable').send(bytes);
+    });
+  }
 
   await app.register(
     async (api) => {

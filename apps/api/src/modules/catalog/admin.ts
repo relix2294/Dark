@@ -34,6 +34,7 @@ import { audit } from '../../shared/audit.js';
 import { requireStaff } from '../../shared/auth/index.js';
 import { AppError, notFound } from '../../shared/errors/index.js';
 import { internalEan13 } from '../../shared/barcode.js';
+import { sniffImage } from '../../shared/storage.js';
 
 /** Админка каталога (ТЗ §9): точки, категории, товары, цены с историей, блюда, зоны доставки. */
 
@@ -139,6 +140,8 @@ async function assertBarcodesFree(tx: Tx, barcodes: string[], exceptId?: string)
 
 export async function registerCatalogAdmin(app: FastifyInstance, deps: AppDeps) {
   const r = app.withTypeProvider<ZodTypeProvider>();
+  // картинки приходят телом запроса как есть
+  app.addContentTypeParser(['image/jpeg', 'image/png', 'image/webp'], { parseAs: 'buffer', bodyLimit: 5 * 1024 * 1024 }, (_req, body, done) => done(null, body));
 
   // ---- точки ----
   r.get('/admin/stores', { schema: { tags, security: sec, response: { 200: StoreListView } } }, async (req) => {
@@ -276,6 +279,30 @@ export async function registerCatalogAdmin(app: FastifyInstance, deps: AppDeps) 
       return (await productViews(tx, [p], deps.clock.now()))[0]!;
     });
   });
+
+  /**
+   * Фото товара: тело запроса — сами байты картинки (JPEG/PNG/WEBP, до 5 МБ). Тип определяется по содержимому.
+   * Без Idempotency-Key: повтор той же картинки даёт тот же адрес (ключ = хэш содержимого) и тот же результат.
+   */
+  r.post(
+    '/admin/products/:id/photo',
+    { config: { idempotency: false }, bodyLimit: 5 * 1024 * 1024, schema: { tags, security: sec, params: IdParams, response: { 200: ProductView } } },
+    async (req) => {
+      const me = requireStaff(req.principal, 'catalog.write');
+      const bytes = req.body as unknown;
+      if (!Buffer.isBuffer(bytes) || bytes.length === 0) throw new AppError('VALIDATION', 'Пришлите картинку телом запроса (image/jpeg, image/png, image/webp)');
+      const img = sniffImage(bytes);
+      if (!img) throw new AppError('VALIDATION', 'Это не JPEG, PNG или WEBP');
+      const [p0] = await deps.db.select().from(product).where(eq(product.id, req.params.id));
+      if (!p0) throw notFound('Товар', req.params.id);
+      const { url } = await deps.storage.put(`products/${p0.id}`, bytes, img.ext, img.type);
+      return deps.db.transaction(async (tx) => {
+        const [p] = await tx.update(product).set({ photoUrl: url }).where(eq(product.id, p0.id)).returning();
+        await audit(tx, { actorType: 'staff', actorId: me.staff_id, action: 'product.photo', objectType: 'product', objectId: p0.id, before: { photo_url: p0.photoUrl }, after: { photo_url: url } });
+        return (await productViews(tx, [p!], deps.clock.now()))[0]!;
+      });
+    },
+  );
 
   // ---- зоны доставки ----
   r.get('/admin/stores/:store_id/zones', { schema: { tags, security: sec, params: StoreIdParams, response: { 200: ZoneListView } } }, async (req) => {

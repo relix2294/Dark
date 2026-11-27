@@ -12,6 +12,7 @@ export async function setupApp() {
     DATABASE_URL: TEST_URL,
     JWT_SECRET: 't'.repeat(32),
     LOG_LEVEL: 'warn',
+    UPLOAD_DIR: `/tmp/dark-test-uploads-${process.pid}`,
   });
   let current = new Date('2026-11-27T07:00:00Z'); // 12:00 Душанбе, точка открыта
   const clock = { now: () => current };

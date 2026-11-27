@@ -136,8 +136,9 @@ function Shop({ onLogout }: { onLogout: () => void }) {
           )}
           {catalog.isLoading && <Spinner />}
           <div className="grid">
-            {(catalog.data?.items ?? []).map((p) => (
+            {[...(catalog.data?.items ?? [])].sort((a, b) => Number(b.in_stock) - Number(a.in_stock)).map((p) => (
               <Card key={p.product_id} tone={p.in_stock ? undefined : 'grey'}>
+                {p.photo_url && <img src={p.photo_url} alt="" loading="lazy" style={{ width: '100%', height: 140, objectFit: 'cover', borderRadius: 10 }} />}
                 <div className="row">
                   <b>
                     {p.name_ru} {p.from_kitchen && <Badge tone="yellow">с кухни Sor Box</Badge>}

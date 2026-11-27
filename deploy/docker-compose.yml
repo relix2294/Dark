@@ -1,5 +1,6 @@
-# Продакшен на одном VPS (как Kassa): Caddy (TLS) → api; Postgres рядом. Запуск: cd deploy && docker compose up -d
-# Секреты — в deploy/.env (не в git): POSTGRES_PASSWORD, JWT_SECRET, DOMAIN
+# Продакшен на одном VPS рядом с Kassa: Caddy → api; Postgres рядом. Запуск: cd deploy && docker compose up -d
+# Секреты — в deploy/.env (не в git; при первом деплое workflow создаёт его сам): POSTGRES_PASSWORD, JWT_SECRET, SITE_ADDRESS.
+# Порты наружу — HTTP_PORT/HTTPS_PORT: на сервере с Kassa и Marzban 80/443 могут быть заняты.
 name: dark
 services:
   db:
@@ -39,6 +40,17 @@ services:
       PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-stub}
       DISPLAY_TZ: Asia/Dushanbe
       METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # фото товаров: local — том ниже (отдаёт Caddy по /media), s3 — переменные S3_* в deploy/.env
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      UPLOAD_DIR: /data/uploads
+      MEDIA_PUBLIC_URL: ${MEDIA_PUBLIC_URL:-/media}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_REGION: ${S3_REGION:-ru-central1}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+    volumes:
+      - ./data/uploads:/data/uploads
     depends_on:
       db: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }
@@ -46,11 +58,12 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
-    ports: ["80:80", "443:443"]
+    ports: ["${HTTP_PORT:-8090}:80", "${HTTPS_PORT:-8453}:443"]
     environment:
-      DOMAIN: ${DOMAIN:?set in deploy/.env}
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./data/caddy:/data
       - ./www:/srv/www:ro
+      - ./data/uploads:/srv/media:ro
     depends_on: [api]

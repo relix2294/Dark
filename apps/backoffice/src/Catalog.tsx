@@ -214,6 +214,7 @@ function ProductEditor({ storeId, brand, product, categories, onClose }: { store
         <Button primary disabled={!f.sku || !f.name_ru || save.isPending} onClick={() => save.mutate()}>
           Сохранить
         </Button>
+        {product && <PhotoUpload product={product} />}
         {product && product.barcodes.length > 0 && (
           <div className="row" style={{ justifyContent: 'flex-start' }}>
             <div id={`label-${product.id}`} style={{ background: '#fff', color: '#000', padding: 8, borderRadius: 6 }}>
@@ -264,4 +265,39 @@ function printLabel(elementId: string) {
   w.document.close();
   w.focus();
   w.print();
+}
+
+/** Фото товара: JPEG/PNG/WEBP до 5 МБ, отправляется как есть, сервер проверяет содержимое. */
+function PhotoUpload({ product }: { product: Product }) {
+  const { api } = useStaff();
+  const qc = useQueryClient();
+  const [url, setUrl] = useState(product.photo_url);
+  const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+  const onFile = async (f: File) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/v1/admin/products/${product.id}/photo`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${api.token.get() ?? ''}`, 'content-type': f.type || 'application/octet-stream' },
+        body: f,
+      });
+      const data = (await res.json()) as { photo_url?: string; error?: { message: string } };
+      if (!res.ok) throw new Error(data.error?.message ?? `HTTP ${res.status}`);
+      setUrl(data.photo_url ?? null);
+      void qc.invalidateQueries({ queryKey: ['admin-products'] });
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="row" style={{ justifyContent: 'flex-start' }}>
+      {url ? <img src={url} alt="" style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 8 }} /> : <div className="muted">Фото нет</div>}
+      <input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={(e) => e.target.files?.[0] && void onFile(e.target.files[0])} />
+      <ErrorBanner error={error} />
+    </div>
+  );
 }
