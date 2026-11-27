@@ -10,7 +10,7 @@ import { loadParams } from '../../shared/params/load.js';
 import { getStore, isOpenAt, priceProducts, resolveZone } from '../catalog/index.js';
 import { applyPromo, countUses, findPromo, recordUse } from '../promo/index.js';
 import { reserveForOrder, unreserve } from '../wms/index.js';
-import { enqueueOrder, estimateReady } from '../kds/index.js';
+import { enqueueOrder, estimateReady, writeOffStartedDishes } from '../kds/index.js';
 import { applyHoldResult, captureAmountNow, openHold, releaseHold } from '../payments/index.js';
 import { courierForOrder, detachOrder } from '../dispatch/index.js';
 import type { StaffPrincipal } from '@dark/contracts';
@@ -330,6 +330,7 @@ export async function cancelByStaff(deps: AppDeps, me: StaffPrincipal, orderId: 
     if (o.brand === 'SOR' && ['cooking', 'ready'].includes(o.status)) fee = percentOf(o.itemsTotalDirams, (await loadParams(tx, o.storeId)).SOR_CANCEL_FEE_PCT);
     await tx.update(order).set({ cancelReason: reason, capturedDirams: fee }).where(eq(order.id, o.id));
     await detachOrder(tx, o.id, `заказ отменён: ${reason}`);
+    if (o.brand === 'SOR') await writeOffStartedDishes(tx, o.storeId, o.id, o.status, me.staff_id, reason);
     await transition(tx, o.id, o.status, 'cancelled', 'staff', me.staff_id, { reason, fee_dirams: fee });
     if (fee === 0) await releaseHold(tx, deps, o.id);
     return { fee };

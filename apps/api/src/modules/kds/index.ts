@@ -10,7 +10,7 @@ import { requireStaff } from '../../shared/auth/index.js';
 import * as svc from './service.js';
 
 export { scheduleOrder, dishColor, sorPromise, type DishToCook, type StationLoad } from './schedule.js';
-export { enqueueOrder, estimateReady } from './service.js';
+export { enqueueOrder, estimateReady, writeOffStartedDishes } from './service.js';
 
 export async function registerKds(app: FastifyInstance, deps: AppDeps) {
   const r = app.withTypeProvider<ZodTypeProvider>();

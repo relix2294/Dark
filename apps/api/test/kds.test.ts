@@ -132,4 +132,18 @@ describe('кухня (ТЗ §8)', () => {
     // очередь после упаковки пуста
     expect((await call('GET', '/api/v1/kds/queue?station=pizza', cook)).json().items).toHaveLength(0);
   });
+
+  it('отмена после начала готовки: удержание по параметру и начатые блюда в списание (ТЗ §11)', async () => {
+    const [u] = await ctx.deps.db.insert(s.userStaff).values({ phone: '+992900000099', name: 'Старший', role: 'shift_lead', storeId: w.store.id, pinHash: hashPin('1234') }).returning();
+    const lead = (await ctx.deps.tokens.sign({ kind: 'staff', staff_id: u!.id, role: 'shift_lead', store_id: w.store.id })).token;
+    const o = (await call('POST', '/api/v1/orders', w.token, { brand: 'SOR', store_id: w.store.id, address_id: w.addr.id, items: [{ product_id: pizza.id, qty: 1, modifiers: { size: ['25'] } }], expected_total_dirams: 6500 + 1500 })).json();
+    const [k] = await ctx.deps.db.select().from(s.kdsItem).where(eq(s.kdsItem.orderId, o.id));
+    await call('POST', `/api/v1/kds/items/${k!.id}/start`, cook);
+    const r = await call('POST', `/api/v1/console/stores/${w.store.id}/orders/${o.id}/cancel`, lead, { reason: 'клиент передумал' });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(r.json().captured_dirams).toBe(6500); // SOR_CANCEL_FEE_PCT = 100 % от блюд, доставка не удерживается
+    const moves = await ctx.deps.db.select().from(s.stockMove).where(and(eq(s.stockMove.refId, o.id), eq(s.stockMove.type, 'write_off')));
+    expect(moves).toHaveLength(1);
+    expect(moves[0]!.reason).toContain('отмена после начала готовки');
+  });
 });

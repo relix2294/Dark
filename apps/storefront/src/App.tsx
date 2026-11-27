@@ -130,6 +130,10 @@ function Shop({ onLogout }: { onLogout: () => void }) {
               {!resolve.data.is_open && <Badge tone="red"> точка закрыта</Badge>}
             </div>
           )}
+          {/* Сервер недоступен (ТЗ §11): не пустой каталог, а честное сообщение; оформление недоступно */}
+          {[catalog.error, resolve.error, cart.error].some((e) => e instanceof ApiError && (e.code === 'NETWORK' || e.status >= 500)) && (
+            <div className="banner banner-error">Временно не принимаем заказы — сервис недоступен. Попробуйте через пару минут.</div>
+          )}
           {catalog.isLoading && <Spinner />}
           <div className="grid">
             {(catalog.data?.items ?? []).map((p) => (

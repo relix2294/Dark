@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { StaffPrincipal, Station } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
 import type { Tx } from '../../shared/db/client.js';
@@ -194,6 +194,24 @@ export async function packed(deps: AppDeps, me: StaffPrincipal, orderId: string)
     await transition(tx, o.id, 'cooking', 'ready', 'staff', me.staff_id);
     return { order_number: o.number, barcode: `PKG-${o.number}` };
   });
+}
+
+/**
+ * Отмена SOR после начала готовки (ТЗ §11): начатые блюда идут в списание — расход ингредиентов по рецептуре
+ * с причиной. Если заказ уже упакован (ready), расход записан при упаковке, повторно не списываем.
+ */
+export async function writeOffStartedDishes(tx: Tx, storeId: string, orderId: string, orderStatus: string, actorId: string, reason: string) {
+  if (orderStatus !== 'cooking') return 0;
+  const started = await tx
+    .select({ k: kdsItem, productId: orderItem.productId, qty: orderItem.qtyOrdered })
+    .from(kdsItem)
+    .innerJoin(orderItem, eq(orderItem.id, kdsItem.orderItemId))
+    .where(and(eq(kdsItem.orderId, orderId), sql`${kdsItem.startedAt} is not null`));
+  if (started.length === 0) return 0;
+  const dishes = await getDishes(tx, started.map((s) => s.productId));
+  const lines = started.flatMap((s) => (dishes.get(s.productId)?.recipe ?? []).map((r) => ({ productId: r.product_id, grams: r.grams * s.qty })));
+  await consumeIngredients(tx, storeId, orderId, lines, actorId, `отмена после начала готовки: ${reason}`);
+  return started.length;
 }
 
 export async function getStopList(deps: AppDeps, me: StaffPrincipal) {
