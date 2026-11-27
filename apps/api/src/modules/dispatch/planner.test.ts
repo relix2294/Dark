@@ -31,7 +31,9 @@ const params = DEFAULT_PARAMS;
 
 describe('диспетчер (ТЗ §6)', () => {
   it('срочный SOR получает курьера раньше нового LAB', () => {
-    const r = planDispatch({ now, store, orders: [lab('L1', 0), sor('S1', 8)], couriers: [courier('c1')], labDemandRecent: true, params });
+    // LAB в другой стороне города — в поездку к пицце его не подсадить
+    const farLab = { ...lab('L1', 0), address: { lat: 38.53, lon: 68.74 } };
+    const r = planDispatch({ now, store, orders: [farLab, sor('S1', 8)], couriers: [courier('c1')], labDemandRecent: true, params });
     expect(r.assignments).toHaveLength(1);
     expect(r.assignments[0]).toMatchObject({ orderId: 'S1', rule: 'sor_urgent' });
     expect(r.deferred).toContainEqual({ orderId: 'L1', reason: 'no_courier' });
@@ -75,5 +77,38 @@ describe('диспетчер (ТЗ §6)', () => {
   it('снимок входа содержит свободных курьеров и очередь', () => {
     const r = planDispatch({ now, store, orders: [lab('L1', 0)], couriers: [courier('c1')], labDemandRecent: true, params });
     expect(r.snapshot).toMatchObject({ lab: ['L1'], free: [{ id: 'c1' }] });
+  });
+});
+
+describe('диспетчер: объединение поездок (этап 2)', () => {
+  const near2 = { lat: 38.5655, lon: 68.7805 };
+  it('курьер один: второй LAB рядом и готов одновременно — в ту же поездку', () => {
+    const l1 = lab('L1', 3);
+    const l2 = { ...lab('L2', 2), address: near2, readyEta: l1.readyEta };
+    const r = planDispatch({ now, store, orders: [l1, l2], couriers: [courier('c1')], labDemandRecent: true, params });
+    expect(r.assignments.map((a) => [a.orderId, a.courierId, a.rule])).toEqual([
+      ['L1', 'c1', 'lab_fifo'],
+      ['L2', 'c1', 'batch'],
+    ]);
+    expect(r.assignments[1]!.sequence).toEqual(['L1', 'L2']);
+  });
+  it('свободных нет — заказ садится в открытое задание курьера на точке', () => {
+    const l1 = lab('L1', 1);
+    const l2 = { ...lab('L2', 0), address: near2, readyEta: l1.readyEta };
+    const r = planDispatch({ now, store, orders: [l2], couriers: [], labDemandRecent: true, openTrips: [{ taskId: 't1', courierId: 'c9', transport: 'bike', orders: [l1] }], params });
+    expect(r.assignments).toEqual([expect.objectContaining({ orderId: 'L2', courierId: 'c9', rule: 'batch', taskId: 't1', sequence: ['L1', 'L2'] })]);
+  });
+  it('обычный SOR в резерве LAB подсаживается к поездке LAB, а не ждёт', () => {
+    const l1 = lab('L1', 0);
+    const s1 = { ...sor('S1', 40, 1), address: near2 };
+    const r = planDispatch({ now, store, orders: [l1, s1], couriers: [courier('c1')], labDemandRecent: true, params });
+    expect(r.assignments.map((a) => [a.orderId, a.rule])).toEqual([
+      ['L1', 'lab_fifo'],
+      ['S1', 'batch'],
+    ]);
+  });
+  it('пока свободные курьеры есть — поездки не объединяются', () => {
+    const r = planDispatch({ now, store, orders: [lab('L1', 1), { ...lab('L2', 0), address: near2 }], couriers: [courier('c1'), courier('c2')], labDemandRecent: true, params });
+    expect(r.assignments.map((a) => a.rule)).toEqual(['lab_fifo', 'lab_fifo']);
   });
 });

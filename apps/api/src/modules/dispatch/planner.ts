@@ -1,6 +1,7 @@
 import type { Brand, Transport } from '@dark/contracts';
 import { travelMinutes, type Geo } from '../../shared/geo.js';
 import type { Params } from '../../shared/params/index.js';
+import { tryAddToTrip, type TripOrder } from './batch.js';
 
 /**
  * Диспетчер курьеров (ТЗ §6): чистая функция без БД. Вход — снимок состояния точки, выход —
@@ -33,12 +34,28 @@ export type DispatchInput = {
   couriers: FreeCourier[];
   /** Были ли активные корзины LAB за последние 5 минут (резерв под LAB нужен). */
   labDemandRecent: boolean;
-  params: Pick<Params, 'SOR_PREASSIGN_MS' | 'SOR_SLACK_BUFFER_MS' | 'LAB_RESERVE' | 'RETURN_LOOKAHEAD_MS' | 'NO_COURIER_WARN_MS' | 'NO_COURIER_ALERT_MS'>;
+  /** Открытые задания курьеров, ещё не уехавших с точки: к ним можно добавить заказ (этап 2). */
+  openTrips?: { taskId: string; courierId: string; transport: Transport; orders: TripOrder[] }[];
+  params: Pick<
+    Params,
+    'SOR_PREASSIGN_MS' | 'SOR_SLACK_BUFFER_MS' | 'LAB_RESERVE' | 'RETURN_LOOKAHEAD_MS' | 'NO_COURIER_WARN_MS' | 'NO_COURIER_ALERT_MS' | 'BATCH_MAX' | 'BATCH_DETOUR_MS'
+  >;
 };
 
-export type Rule = 'sor_urgent' | 'lab_fifo' | 'sor_regular';
+export type Rule = 'sor_urgent' | 'lab_fifo' | 'sor_regular' | 'batch';
 
-export type Assignment = { orderId: string; courierId: string; rule: Rule; slackMin: number; travelMin: number };
+export type Assignment = {
+  orderId: string;
+  courierId: string;
+  rule: Rule;
+  slackMin: number;
+  travelMin: number;
+  /** Порядок доставки в поездке курьера после этого назначения. */
+  sequence: string[];
+  /** Заказ добавлен к уже открытому заданию. */
+  taskId?: string;
+  detourMin?: number;
+};
 export type Alert = { orderId: string; level: 'warn' | 'alert'; waitingMin: number };
 
 export type DispatchResult = {
@@ -81,6 +98,7 @@ export function planDispatch(input: DispatchInput): DispatchResult {
     free: free.map((c) => ({ id: c.id, transport: c.transport, etaToStoreMin: c.etaToStoreMin })),
     lab: lab.map((o) => o.id),
     sor: sor.map((o) => ({ id: o.id, slackMin: Math.round(slackOf(o) * 10) / 10 })),
+    open_trips: (input.openTrips ?? []).map((t) => ({ task: t.taskId, courier: t.courierId, orders: t.orders.map((o) => o.id) })),
     labDemandRecent: input.labDemandRecent,
   };
 
@@ -97,19 +115,48 @@ export function planDispatch(input: DispatchInput): DispatchResult {
     return best;
   };
 
+  // поездки этого тика и открытые задания: к ним можно подсадить заказ, когда свободного курьера нет
+  const trips = new Map<string, { taskId?: string; transport: Transport; seq: TripOrder[] }>();
+  for (const t of input.openTrips ?? []) trips.set(t.courierId, { taskId: t.taskId, transport: t.transport, seq: [...t.orders] });
+
+  const tryJoin = (o: PendingOrder): boolean => {
+    let best: { courierId: string; seq: TripOrder[]; detourMin: number } | null = null;
+    for (const [courierId, t] of trips) {
+      const r = tryAddToTrip(store, t.seq, o, t.transport, now, params);
+      if (r.ok && (!best || r.detourMin < best.detourMin)) best = { courierId, seq: r.seq, detourMin: r.detourMin };
+    }
+    if (!best) return false;
+    const t = trips.get(best.courierId)!;
+    t.seq = best.seq;
+    assignments.push({
+      orderId: o.id,
+      courierId: best.courierId,
+      rule: 'batch',
+      slackMin: Math.round(((o.promisedAt.getTime() - now.getTime()) / MIN - travelMinutes(store, o.address, t.transport)) * 10) / 10,
+      travelMin: Math.round(travelMinutes(store, o.address, t.transport) * 10) / 10,
+      sequence: best.seq.map((x) => x.id),
+      ...(t.taskId ? { taskId: t.taskId } : {}),
+      detourMin: best.detourMin,
+    });
+    return true;
+  };
+
   const assign = (o: PendingOrder, rule: Rule): boolean => {
     const c = nearest(o);
     if (!c) {
+      if (tryJoin(o)) return true;
       deferred.push({ orderId: o.id, reason: 'no_courier' });
       return false;
     }
     free.splice(free.indexOf(c), 1);
+    trips.set(c.id, { transport: c.transport, seq: [o] });
     assignments.push({
       orderId: o.id,
       courierId: c.id,
       rule,
       slackMin: Math.round(slackMinutes(o, now, c, store) * 10) / 10,
       travelMin: Math.round(travelMinutes(store, o.address, c.transport) * 10) / 10,
+      sequence: [o.id],
     });
     return true;
   };
@@ -127,7 +174,8 @@ export function planDispatch(input: DispatchInput): DispatchResult {
   // 3. Остальные SOR — только если остаётся резерв под LAB
   for (const o of sorRest) {
     if (free.length > params.LAB_RESERVE || !input.labDemandRecent) assign(o, 'sor_regular');
-    else deferred.push({ orderId: o.id, reason: 'lab_reserve' });
+    // резерв под LAB трогать нельзя, но подсесть к уже идущей поездке LAB можно (LAB + SOR, ТЗ §6)
+    else if (!tryJoin(o)) deferred.push({ orderId: o.id, reason: 'lab_reserve' });
   }
 
   // 4. Контроль ожидания готовых заказов без курьера

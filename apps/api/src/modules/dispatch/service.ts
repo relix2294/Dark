@@ -333,20 +333,44 @@ export async function dispatchStore(deps: AppDeps, storeId: string): Promise<{ a
       .where(and(eq(order.storeId, storeId), inArray(order.status, ['paid_hold', 'picking', 'cooking', 'ready']), notInArray(order.id, busyOrders)))
       .for('update', { skipLocked: true });
 
-    const pending: PendingOrder[] = [];
-    for (const o of candidates) {
-      const a = o.addressSnapshot as { lat: number; lon: number };
+    const toPending = async (o: typeof order.$inferSelect): Promise<PendingOrder> => {
       let readyEta: Date;
       if (o.status === 'ready') readyEta = now;
       else if (o.brand === 'LAB') {
-        if (o.status === 'paid_hold') continue; // LAB ждёт сборщика; диспетчер запускается с picking (ТЗ §6)
         const [pt] = await tx.select().from(pickTask).where(eq(pickTask.orderId, o.id));
         readyEta = new Date((pt?.startedAt ?? now).getTime() + P.LAB_PICK_SLA_MS);
       } else {
         const [k] = await tx.select({ t: sql<Date>`max(${kdsItem.targetReadyAt})` }).from(kdsItem).where(eq(kdsItem.orderId, o.id));
         readyEta = k?.t ? new Date(k.t) : new Date(now.getTime() + P.SOR_PROMISE_MS);
       }
-      pending.push({ id: o.id, brand: o.brand, createdAt: o.createdAt, readyEta, promisedAt: o.promisedAt ?? new Date(now.getTime() + P.LAB_PROMISE_MS), address: a, readyAt: o.readyAt });
+      return {
+        id: o.id,
+        brand: o.brand,
+        createdAt: o.createdAt,
+        readyEta,
+        promisedAt: o.promisedAt ?? new Date(now.getTime() + P.LAB_PROMISE_MS),
+        address: o.addressSnapshot as { lat: number; lon: number },
+        readyAt: o.readyAt,
+      };
+    };
+    const pending: PendingOrder[] = [];
+    for (const o of candidates) {
+      if (o.brand === 'LAB' && o.status === 'paid_hold') continue; // LAB ждёт сборщика; диспетчер запускается с picking (ТЗ §6)
+      pending.push(await toPending(o));
+    }
+
+    // открытые задания курьеров, ещё не уехавших с точки: к ним можно подсадить заказ (этап 2 ТЗ §6)
+    const open = await tx
+      .select({ t: deliveryTask, transport: courier.transport })
+      .from(deliveryTask)
+      .innerJoin(courier, eq(courier.id, deliveryTask.courierId))
+      .where(and(eq(deliveryTask.storeId, storeId), inArray(deliveryTask.status, ['offered', 'accepted', 'at_store'])))
+      .for('update', { of: deliveryTask, skipLocked: true });
+    const openTrips = [];
+    for (const { t, transport } of open) {
+      const os = t.orderIds.length ? await tx.select().from(order).where(inArray(order.id, t.orderIds)) : [];
+      const ordered = t.orderIds.map((id) => os.find((o) => o.id === id)).filter((o): o is typeof order.$inferSelect => !!o);
+      openTrips.push({ taskId: t.id, courierId: t.courierId, transport, orders: await Promise.all(ordered.map(toPending)) });
     }
 
     const couriers = await tx
@@ -367,9 +391,18 @@ export async function dispatchStore(deps: AppDeps, storeId: string): Promise<{ a
       .from(order)
       .where(and(eq(order.storeId, storeId), eq(order.brand, 'LAB'), gt(order.createdAt, new Date(now.getTime() - 5 * 60_000))));
 
-    const plan = planDispatch({ now, store: st, orders: pending, couriers: free, labDemandRecent: (recent?.n ?? 0) > 0, params: P });
+    const plan = planDispatch({ now, store: st, orders: pending, couriers: free, labDemandRecent: (recent?.n ?? 0) > 0, openTrips, params: P });
 
+    // одно задание на поездку: новое — при первом назначении курьеру в этом тике, дальше — порядок доставки обновляется
+    const taskOf = new Map<string, string>();
     for (const a of plan.assignments) {
+      const existing = a.taskId ?? taskOf.get(a.courierId);
+      const snap = { rule: a.rule, slack_min: a.slackMin, travel_min: a.travelMin, detour_min: a.detourMin ?? null, sequence: a.sequence, input: plan.snapshot };
+      if (existing) {
+        await tx.update(deliveryTask).set({ orderIds: a.sequence, dispatchSnapshot: JSON.stringify(snap) }).where(eq(deliveryTask.id, existing));
+        await publish(tx, { topic: 'task.offered', aggregateType: 'delivery_task', aggregateId: existing, payload: { courier_id: a.courierId, order_id: a.orderId, rule: a.rule, batched: true } });
+        continue;
+      }
       const [c] = await tx.select().from(courier).where(eq(courier.id, a.courierId)).for('update');
       if (!c) continue;
       const [t] = await tx
@@ -378,14 +411,14 @@ export async function dispatchStore(deps: AppDeps, storeId: string): Promise<{ a
           courierId: c.id,
           storeId,
           status: P.AUTO_ACCEPT ? 'accepted' : 'offered',
-          orderIds: [a.orderId],
+          orderIds: a.sequence,
           assignedAt: now,
           assignedBy: 'auto',
-          dispatchSnapshot: JSON.stringify({ rule: a.rule, slack_min: a.slackMin, travel_min: a.travelMin, input: plan.snapshot }),
+          dispatchSnapshot: JSON.stringify(snap),
         })
         .returning();
-      if (c.status === 'returning') await setCourierStatus(tx, c, 'assigned', 'system');
-      else await setCourierStatus(tx, c, 'assigned', 'system');
+      taskOf.set(c.id, t!.id);
+      await setCourierStatus(tx, c, 'assigned', 'system');
       await publish(tx, { topic: 'task.offered', aggregateType: 'delivery_task', aggregateId: t!.id, payload: { courier_id: c.id, order_id: a.orderId, rule: a.rule, auto_accept: P.AUTO_ACCEPT } });
     }
 
