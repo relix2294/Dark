@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
+import websocket from '@fastify/websocket';
 import {
   jsonSchemaTransform,
   serializerCompiler,
@@ -14,6 +15,7 @@ import type { Config } from './config.js';
 import { createDb, type Db } from './shared/db/client.js';
 import { AppError } from './shared/errors/index.js';
 import { loggerOptions } from './shared/logger.js';
+import { registerMetrics } from './shared/metrics.js';
 import { TokenService } from './shared/auth/index.js';
 import { authPlugin } from './shared/auth/plugin.js';
 import { idempotencyPlugin } from './shared/idempotency/plugin.js';
@@ -29,6 +31,7 @@ import { registerPromoAdmin } from './modules/promo/index.js';
 import { isStaffActive, registerStaffAdmin } from './modules/customers/index.js';
 import { registerWmsAdmin } from './modules/wms/index.js';
 import { registerCourierPlan } from './modules/dispatch/index.js';
+import { registerRealtime } from './modules/realtime/index.js';
 import { registerWms } from './modules/wms/index.js';
 import { registerKds } from './modules/kds/index.js';
 import { registerDispatch } from './modules/dispatch/index.js';
@@ -78,6 +81,7 @@ export async function buildApp(deps: AppDeps) {
     transform: jsonSchemaTransform,
   });
   await app.register(swaggerUi, { routePrefix: '/docs' });
+  await app.register(websocket, { options: { maxPayload: 1024 } });
 
   await app.register(authPlugin, { tokens: deps.tokens });
   // Заблокированный сотрудник теряет доступ сразу, а не по истечении токена
@@ -108,6 +112,7 @@ export async function buildApp(deps: AppDeps) {
   );
 
   app.get('/health', { config: { idempotency: false } }, async () => ({ ok: true, at: deps.clock.now().toISOString() }));
+  registerMetrics(app, deps.db, deps.config.METRICS_TOKEN);
 
   await app.register(
     async (api) => {
@@ -125,6 +130,7 @@ export async function buildApp(deps: AppDeps) {
       await registerWmsAdmin(api, deps);
       await registerCourierPlan(api, deps);
       await registerReports(api, deps);
+      await registerRealtime(api, deps);
     },
     { prefix: '/api/v1' },
   );

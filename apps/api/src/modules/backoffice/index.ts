@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   ConsoleCouriersView,
@@ -86,7 +86,7 @@ export async function registerBackoffice(app: FastifyInstance, deps: AppDeps) {
   });
 
   r.get('/backoffice/stores/:store_id/params', { schema: { tags: ['backoffice'], security: [{ bearer: [] }], params: ParamsPath } }, async (req) => {
-    requireStaff(req.principal, 'shift_lead.console', req.params.store_id);
+    requireStaffAny(req.principal, ['shift_lead.console', 'params.write'], req.params.store_id);
     return getParams(deps, req.params.store_id);
   });
 
@@ -119,13 +119,20 @@ export async function registerBackoffice(app: FastifyInstance, deps: AppDeps) {
   );
 
   r.get('/backoffice/audit', { schema: { tags: ['backoffice'], security: [{ bearer: [] }], querystring: z.object({ object_type: z.string().optional(), object_id: z.string().optional() }) } }, async (req) => {
-    requireStaff(req.principal, 'shift_lead.console');
+    const me = requireStaff(req.principal, 'audit.read');
     const { object_type, object_id } = req.query;
     return deps.db
       .select()
       .from(auditLog)
-      .where(and(object_type ? eq(auditLog.objectType, object_type) : undefined, object_id ? eq(auditLog.objectId, object_id) : undefined))
-      .orderBy(auditLog.createdAt)
+      // сотрудник точки видит журнал только своей точки (ТЗ §9)
+      .where(
+        and(
+          object_type ? eq(auditLog.objectType, object_type) : undefined,
+          object_id ? eq(auditLog.objectId, object_id) : undefined,
+          me.store_id ? eq(auditLog.storeId, me.store_id) : undefined,
+        ),
+      )
+      .orderBy(desc(auditLog.createdAt))
       .limit(200);
   });
 }

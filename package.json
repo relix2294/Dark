@@ -20,7 +20,8 @@
     "db:seed": "pnpm --filter @dark/api db:seed",
     "api": "pnpm --filter @dark/api dev",
     "build:web": "bash scripts/build-web.sh",
-    "e2e": "node scripts/e2e.mjs"
+    "e2e": "node scripts/e2e.mjs",
+    "e2e:admin": "node scripts/e2e-admin.mjs"
   },
   "devDependencies": {
     "turbo": "^2.5.0",

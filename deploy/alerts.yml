@@ -1,0 +1,55 @@
+# Правила тревог Prometheus по таблице ТЗ §10. Метрики — GET /metrics на api:3000 (внутри сети docker, наружу Caddy не отдаёт).
+groups:
+  - name: dark
+    rules:
+      - alert: ApiErrorRateHigh
+        expr: |
+          sum(rate(dark_http_requests_total{status="5xx"}[5m]))
+            / clamp_min(sum(rate(dark_http_requests_total[5m])), 1e-9) > 0.02
+        for: 5m
+        labels: { severity: page, to: dev_on_call }
+        annotations: { summary: "Доля ошибок API больше 2 % за 5 минут" }
+
+      - alert: CreateOrderSlow
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(dark_http_request_duration_seconds_bucket{route="/api/v1/orders",method="POST"}[5m]))) > 2
+        for: 5m
+        labels: { severity: page, to: dev_on_call }
+        annotations: { summary: "POST /orders: 95-й перцентиль больше 2 с" }
+
+      - alert: HoldFailuresHigh
+        expr: dark_holds_failed_10m / clamp_min(dark_holds_total_10m, 1) > 0.10 and dark_holds_total_10m >= 10
+        labels: { severity: page, to: dev_on_call_and_bank }
+        annotations: { summary: "Неуспешных холдов больше 10 % за 10 минут" }
+
+      - alert: PaymentsStuckPending
+        expr: dark_payments_pending_over_5m > 0
+        labels: { severity: ticket, to: finance }
+        annotations: { summary: "Платежи в *_pending дольше 5 минут" }
+
+      - alert: OrderWaitsCourier
+        expr: dark_ready_without_courier_seconds > 420   # NO_COURIER_ALERT = 7 мин
+        labels: { severity: page, to: store_manager }
+        annotations: { summary: "Готовый заказ ждёт курьера дольше 7 минут на точке {{ $labels.store_id }}" }
+
+      - alert: OutboxBacklog
+        expr: dark_outbox_backlog > 100 or dark_outbox_oldest_seconds > 60
+        for: 1m
+        labels: { severity: page, to: dev_on_call }
+        annotations: { summary: "Очередь outbox: больше 100 событий или старше 1 минуты" }
+
+      - alert: ApiDown
+        expr: up{job="dark-api"} == 0
+        for: 2m
+        labels: { severity: page, to: dev_on_call }
+        annotations: { summary: "API не отвечает" }
+
+      - alert: StaffScreenOffline
+        # Терминал сборщика или экран кухни не на связи 2 минуты в рабочее время (часы работы точки — 08–23 Душанбе, UTC+5)
+        expr: |
+          (absent(dark_ws_clients{role="picker"}) or sum by (store_id) (dark_ws_clients{role="picker"}) == 0
+           or absent(dark_ws_clients{role="cook"}) or sum by (store_id) (dark_ws_clients{role="cook"}) == 0)
+          and on() (hour() >= 3 and hour() < 18)
+        for: 2m
+        labels: { severity: ticket, to: shift_lead }
+        annotations: { summary: "Терминал или экран кухни не на связи" }

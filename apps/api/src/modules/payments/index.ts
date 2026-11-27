@@ -5,4 +5,4 @@
 export type { WalletAdapter, HoldResult, OpResult } from './adapter.js';
 export { StubWalletAdapter } from './stub-adapter.js';
 export { paymentMachine } from './state-machine.js';
-export { openHold, applyHoldResult, prepareCapture, executeCapture, releaseHold, captureAmountNow, refund, reconcilePending, CAPTURE_RETRY_DELAYS_SEC } from './service.js';
+export { openHold, applyHoldResult, prepareCapture, executeCapture, releaseHold, captureAmountNow, refund, reconcilePending, releaseOrphanHolds, warnExpiringHolds, nightlyReconcile, CAPTURE_RETRY_DELAYS_SEC } from './service.js';

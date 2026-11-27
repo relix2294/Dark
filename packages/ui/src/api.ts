@@ -55,6 +55,7 @@ export function createApi(opts: { base?: string; tokenKey: string; onUnauthorize
     get: <T>(path: string) => request<T>('GET', path),
     post: <T>(path: string, body?: unknown, idemKey?: string) => request<T>('POST', path, body ?? {}, idemKey),
     put: <T>(path: string, body: unknown, idemKey?: string) => request<T>('PUT', path, body, idemKey),
+    patch: <T>(path: string, body: unknown, idemKey?: string) => request<T>('PATCH', path, body, idemKey),
     /** SSE-поток заказа; возвращает функцию остановки. */
     stream: (path: string, onEvent: (name: string, data: unknown) => void) => {
       // EventSource не умеет заголовки: передаём токен запросом с fetch + ReadableStream

@@ -12,6 +12,12 @@ export function registerNotifySubscribers(relay: OutboxRelay, log: FastifyBaseLo
   relay.on('payment.failed', async (e) => {
     log.warn({ payment_id: e.aggregateId, ...e.payload }, 'notify: оплата не прошла');
   });
+  relay.on('payment.hold_expiring', async (e) => {
+    log.warn({ payment_id: e.aggregateId, ...e.payload }, 'notify: холд скоро истечёт — оператору');
+  });
+  relay.on('payment.reconcile_mismatch', async (e) => {
+    log.error({ payment_id: e.aggregateId, ...e.payload }, 'notify: расхождение с банком — финансисту');
+  });
   relay.on('dispatch.no_courier', async (e) => {
     log.warn({ ...e.payload }, 'notify: заказ ждёт курьера — старшему смены');
   });

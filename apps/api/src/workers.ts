@@ -5,8 +5,9 @@ import type { AppDeps } from './app.js';
 import { OutboxRelay } from './shared/events/outbox.js';
 import { courierPosition, idempotencyKey, store } from './shared/db/schema/index.js';
 import { registerNotifySubscribers } from './modules/notify/index.js';
+import { registerRealtimeSubscriber } from './modules/realtime/index.js';
 import { dispatchStore } from './modules/dispatch/index.js';
-import { CAPTURE_RETRY_DELAYS_SEC, executeCapture, reconcilePending } from './modules/payments/index.js';
+import { CAPTURE_RETRY_DELAYS_SEC, executeCapture, nightlyReconcile, reconcilePending, releaseOrphanHolds, warnExpiringHolds } from './modules/payments/index.js';
 import { markPaymentFailed } from './modules/orders/index.js';
 
 /**
@@ -14,6 +15,7 @@ import { markPaymentFailed } from './modules/orders/index.js';
  * - outbox.relay: доставка событий подписчикам (каждые 2 с);
  * - dispatch.tick: диспетчер по каждой активной точке (каждые 15 с, ТЗ §6);
  * - payments.reconcile: платежи в *_pending старше 60 с (каждую минуту, ТЗ §5);
+ * - payments.nightly: ночная сверка списаний и возвратов с банком (04:00 Душанбе, ТЗ §5);
  * - payments.capture: повтор списания 1, 5, 15 мин, затем раз в час сутки, потом тревога (ТЗ §5 п.7);
  * - housekeeping: courier_position старше 30 дней, ключи идемпотентности старше 7 дней (03:00 Душанбе).
  */
@@ -24,8 +26,9 @@ export async function startWorkers(deps: AppDeps, log: FastifyBaseLogger) {
 
   const relay = new OutboxRelay(deps.db, log);
   registerNotifySubscribers(relay, log);
+  registerRealtimeSubscriber(relay, deps.db);
 
-  for (const q of ['outbox.relay', 'payments.reconcile', 'payments.capture', 'dispatch.tick', 'housekeeping']) await boss.createQueue(q);
+  for (const q of ['outbox.relay', 'payments.reconcile', 'payments.capture', 'payments.nightly', 'dispatch.tick', 'housekeeping']) await boss.createQueue(q);
 
   await boss.work('outbox.relay', async () => {
     let n = 0;
@@ -49,6 +52,14 @@ export async function startWorkers(deps: AppDeps, log: FastifyBaseLogger) {
     const r = await reconcilePending(deps);
     if (r.failedOrderIds.length) await markPaymentFailed(deps, r.failedOrderIds);
     for (const paymentId of r.retryCaptureIds) await boss.send('payments.capture', { paymentId, attempt: 0 }, { singletonKey: paymentId, singletonSeconds: 60 });
+    const orphans = await releaseOrphanHolds(deps);
+    if (orphans.length) log.warn({ order_ids: orphans }, 'payments: сняты холды у завершённых заказов');
+    await warnExpiringHolds(deps);
+  });
+
+  await boss.work('payments.nightly', async () => {
+    const r = await nightlyReconcile(deps, deps.clock.now());
+    log.info({ checked: r.checked, mismatches: r.mismatches.length }, 'ночная сверка платежей');
   });
 
   await boss.work<{ paymentId: string; attempt: number }>('payments.capture', async ([job]) => {
@@ -74,6 +85,7 @@ export async function startWorkers(deps: AppDeps, log: FastifyBaseLogger) {
   await boss.schedule('payments.reconcile', '* * * * *');
   await boss.schedule('dispatch.tick', '* * * * *');
   await boss.schedule('housekeeping', '0 3 * * *', {}, { tz: 'Asia/Dushanbe' });
+  await boss.schedule('payments.nightly', '0 4 * * *', {}, { tz: 'Asia/Dushanbe' });
 
   // Частые тики без ожидания cron
   const fast = setInterval(() => {

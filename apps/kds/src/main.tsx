@@ -5,7 +5,7 @@ import { StaffAuthProvider } from '@dark/ui';
 import '@dark/ui/styles.css';
 import { App } from './App.js';
 
-const qc = new QueryClient({ defaultOptions: { queries: { refetchInterval: 3000, retry: 1 } } });
+const qc = new QueryClient({ defaultOptions: { queries: { refetchInterval: 30_000, retry: 1 } } });
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

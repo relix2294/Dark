@@ -176,3 +176,61 @@ export async function reconcilePending(deps: AppDeps): Promise<{ failedOrderIds:
   }
   return { failedOrderIds, retryCaptureIds };
 }
+
+/**
+ * Страховка от зависших денег: холд остался у заказа, который уже отменён или не оплачен
+ * (release не прошёл из-за сбоя банка). Снимаем холд; при неуспехе попробуем на следующем проходе.
+ */
+export async function releaseOrphanHolds(deps: AppDeps): Promise<string[]> {
+  const rows = await deps.db.execute<{ order_id: string }>(sql`
+    select p.order_id from payment p join "order" o on o.id = p.order_id
+    where p.status = 'held' and o.status in ('cancelled', 'payment_failed') and coalesce(o.captured_dirams, 0) = 0`);
+  const released: string[] = [];
+  for (const r of rows.rows) {
+    await deps.db.transaction((tx) => releaseHold(tx, deps, r.order_id));
+    const [p] = await deps.db.select({ s: payment.status }).from(payment).where(eq(payment.orderId, r.order_id));
+    if (p?.s === 'released') released.push(r.order_id);
+  }
+  return released;
+}
+
+/** За 10 минут до истечения холда у незавершённого заказа — тревога оператору (ТЗ §5). Не чаще раза в 10 минут. */
+export async function warnExpiringHolds(deps: AppDeps): Promise<number> {
+  const now = deps.clock.now();
+  const rows = await deps.db.execute<{ id: string; order_id: string; store_id: string; expires: Date }>(sql`
+    select p.id, p.order_id, o.store_id, p.hold_expires_at expires from payment p join "order" o on o.id = p.order_id
+    where p.status = 'held' and p.hold_expires_at < ${new Date(now.getTime() + 10 * 60_000)}
+      and o.status in ('paid_hold', 'picking', 'cooking', 'ready', 'on_the_way', 'returning')
+      and not exists (select 1 from outbox e where e.topic = 'payment.hold_expiring' and e.aggregate_id = p.id::text
+                      and e.created_at > ${new Date(now.getTime() - 10 * 60_000)})`);
+  for (const r of rows.rows) {
+    await deps.db.transaction((tx) =>
+      publish(tx, { topic: 'payment.hold_expiring', aggregateType: 'payment', aggregateId: r.id, payload: { order_id: r.order_id, store_id: r.store_id, expires_at: new Date(r.expires).toISOString() } }),
+    );
+  }
+  return rows.rows.length;
+}
+
+/**
+ * Ночная сверка (ТЗ §5, 04:00): каждое успешное списание и возврат за сутки сверяется с состоянием у банка.
+ * Пока реестр банка не получен — через status(); после — сравнение с реестром за тем же интерфейсом.
+ */
+export async function nightlyReconcile(deps: AppDeps, day: Date): Promise<{ checked: number; mismatches: { payment_id: string; expected: string; bank: string }[] }> {
+  const from = new Date(day.getTime() - 24 * 3600_000);
+  const rows = await deps.db.execute<{ payment_id: string; provider_ref: string; status: string }>(sql`
+    select distinct p.id payment_id, p.provider_ref, p.status from payment_op op join payment p on p.id = op.payment_id
+    where op.status = 'ok' and op.type in ('capture', 'refund') and op.updated_at >= ${from} and op.updated_at < ${day}
+      and p.provider_ref is not null`);
+  const expected: Record<string, string[]> = { captured: ['captured'], partially_refunded: ['refunded', 'captured'], refunded: ['refunded'] };
+  const mismatches: { payment_id: string; expected: string; bank: string }[] = [];
+  for (const r of rows.rows) {
+    const bank = await deps.wallet.status(r.provider_ref);
+    if (!(expected[r.status] ?? [r.status]).includes(bank)) mismatches.push({ payment_id: r.payment_id, expected: r.status, bank });
+  }
+  if (mismatches.length) {
+    await deps.db.transaction(async (tx) => {
+      for (const m of mismatches) await publish(tx, { topic: 'payment.reconcile_mismatch', aggregateType: 'payment', aggregateId: m.payment_id, payload: m });
+    });
+  }
+  return { checked: rows.rows.length, mismatches };
+}

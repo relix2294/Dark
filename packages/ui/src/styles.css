@@ -100,3 +100,10 @@ table.table { width: 100%; border-collapse: collapse; }
 .bottom-nav button { flex: 1; background: none; border: 0; color: var(--muted); padding: 12px 0; font-size: 13px; font-weight: 600; }
 .bottom-nav button.active { color: var(--primary); }
 @media (min-width: 900px) { .screen-body { padding: 20px 28px; } }
+
+.modal {
+  position: fixed; inset: 0; z-index: 10; background: #000a; display: flex; align-items: flex-start; justify-content: center;
+  padding: 40px 16px; overflow-y: auto;
+}
+.modal > .card { width: 100%; max-width: 760px; }
+textarea.input { font: 14px/1.4 ui-monospace, monospace; }

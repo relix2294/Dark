@@ -11,3 +11,4 @@
 | [005](005-geo-without-postgis.md) | Гео в коде без PostGIS на первом этапе | принято |
 | [006](006-clients-pwa-vs-native.md) | PWA для сборщика и кухни, Expo для курьера | принято |
 | [007](007-payments-adapter.md) | Платежи за адаптером с заглушкой | принято |
+| [008](008-realtime-notify.md) | Realtime через outbox и Postgres LISTEN/NOTIFY | принято |

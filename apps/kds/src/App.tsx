@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
 import type { KdsItemView, KdsPackListView, KdsQueueView, StopListView, Station } from '@dark/contracts';
-import { Badge, Button, Card, ErrorBanner, Screen, Spinner, minutesLeft, time, useStaff } from '@dark/ui';
+import { Badge, Button, Card, ErrorBanner, Screen, Spinner, liveTitle, minutesLeft, time, useLive, useStaff } from '@dark/ui';
 
 type Queue = z.infer<typeof KdsQueueView>;
 type Item = z.infer<typeof KdsItemView>;
@@ -14,7 +14,8 @@ const STATION_RU: Record<Station, string> = { pizza: 'Пицца', grill: 'Гр�
 
 /** Экран кухни (ТЗ §8): очередь станции с цветами, упаковка, стоп-лист. Планшет в ландшафте, крупные карточки. */
 export function App() {
-  const { logout } = useStaff();
+  const { api, logout } = useStaff();
+  const live = useLive(api);
   const [tab, setTab] = useState<Tab>((localStorage.getItem('dark.kds.tab') as Tab) ?? 'pizza');
   const pick = (t: Tab) => {
     setTab(t);
@@ -31,7 +32,12 @@ export function App() {
           ))}
         </div>
       }
-      actions={<Button onClick={logout}>Выйти</Button>}
+      actions={
+        <>
+          <Badge tone={live ? 'green' : 'red'}>{liveTitle(live)}</Badge>
+          <Button onClick={logout}>Выйти</Button>
+        </>
+      }
     >
       {tab === 'stop' ? <StopList /> : tab === 'pack' ? <PackScreen /> : <StationQueue station={tab} />}
     </Screen>

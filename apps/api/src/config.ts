@@ -8,6 +8,8 @@ const Env = z.object({
   JWT_SECRET: z.string().min(32),
   PAYMENT_PROVIDER: z.enum(['stub', 'dc']).default('stub'),
   DISPLAY_TZ: z.string().default('Asia/Dushanbe'),
+  /** Токен для /metrics; пусто — эндпоинт открыт (закрыть на уровне сети). */
+  METRICS_TOKEN: z.string().optional(),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
 

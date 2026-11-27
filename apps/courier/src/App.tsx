@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
 import type { CourierSelfView, DeliveryTaskView } from '@dark/contracts';
-import { BRAND_RU, Badge, Button, COURIER_STATUS_RU, Card, ErrorBanner, Field, ORDER_STATUS_RU, Screen, Spinner, minutesLeft, time, useBarcodeScanner, useStaff } from '@dark/ui';
+import { BRAND_RU, Badge, Button, COURIER_STATUS_RU, Card, ErrorBanner, Field, ORDER_STATUS_RU, Screen, Spinner, minutesLeft, time, useBarcodeScanner, useLive, useStaff } from '@dark/ui';
 
 type Me = z.infer<typeof CourierSelfView>;
 type Task = z.infer<typeof DeliveryTaskView>;
@@ -18,6 +18,8 @@ export function App() {
   const me = useQuery({ queryKey: ['me'], queryFn: () => api.get<Me>('/courier/me') });
   const task = useQuery({ queryKey: ['task'], queryFn: () => api.get<Task | null>('/courier/tasks/current') });
   const refresh = () => void qc.invalidateQueries();
+  // новое задание приходит событием task.offered — вибрация, чтобы курьер заметил
+  useLive(api, { onEvent: (e) => { if (e.topic === 'task.offered') navigator.vibrate?.([200, 100, 200]); } });
   const shift = useMutation({ mutationFn: (p: 'start' | 'end' | 'break') => api.post<Me>(`/courier/shift/${p}`, p === 'start' ? { transport: 'bike' } : {}), onSuccess: refresh });
   const [geo, setGeo] = useState<GeolocationPosition | null>(null);
   const queue = useRef<{ lat: number; lon: number; at: string; accuracy_m: number }[]>(JSON.parse(localStorage.getItem('dark.courier.posq') ?? '[]'));

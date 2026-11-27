@@ -38,6 +38,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set in deploy/.env}
       PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-stub}
       DISPLAY_TZ: Asia/Dushanbe
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
     depends_on:
       db: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }

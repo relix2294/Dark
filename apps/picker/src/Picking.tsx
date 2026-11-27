@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
 import type { PickLabelView, PickTaskView } from '@dark/contracts';
-import { ApiError, Badge, Button, Card, ErrorBanner, NumPad, Spinner, useBarcodeScanner, useStaff } from '@dark/ui';
+import { ApiError, Badge, Button, Card, ErrorBanner, NumPad, Spinner, postOrQueue, useBarcodeScanner, useLive, useOfflineQueue, useStaff } from '@dark/ui';
 
 type Task = z.infer<typeof PickTaskView>;
 type Item = Task['items'][number];
@@ -15,7 +15,26 @@ type Label = z.infer<typeof PickLabelView>;
 export function Picking() {
   const { api } = useStaff();
   const qc = useQueryClient();
-  const task = useQuery({ queryKey: ['pick-next'], queryFn: () => api.get<Task | null>('/wms/pick-tasks/next'), refetchInterval: (q) => (q.state.data ? false : 5000) });
+  // новое задание: событие order.status_changed → перечитываем; опрос раз в 15 с — страховка
+  useLive(api);
+  // текущее задание хранится на устройстве: перезагрузка без связи не теряет сборку
+  const cached = (() => {
+    try {
+      return JSON.parse(localStorage.getItem('dark.picker.task') ?? 'null') as Task | null;
+    } catch {
+      return null;
+    }
+  })();
+  const task = useQuery({
+    queryKey: ['pick-next'],
+    queryFn: () => api.get<Task | null>('/wms/pick-tasks/next'),
+    refetchInterval: (q) => (q.state.data ? false : 15_000),
+    ...(cached ? { initialData: cached, initialDataUpdatedAt: 0 } : {}),
+  });
+  useEffect(() => {
+    if (task.data !== undefined) localStorage.setItem('dark.picker.task', JSON.stringify(task.data));
+  }, [task.data]);
+  const queue = useOfflineQueue<Task>(api, 'dark.picker.queue', (data) => qc.setQueryData(['pick-next'], data));
   const [cell, setCell] = useState<string | null>(null);
   const [item, setItem] = useState<Item | null>(null);
   const [barcode, setBarcode] = useState<string | null>(null);
@@ -33,7 +52,13 @@ export function Picking() {
   const t = task.data;
 
   const scan = useMutation({
-    mutationFn: (p: { cell_code: string; barcode: string; qty: number; weight_g?: number }) => api.post<Task>(`/wms/pick-tasks/${t!.task_id}/scan`, p),
+    mutationFn: async (p: { cell_code: string; barcode: string; qty: number; weight_g?: number }) => {
+      if (queue.overLimit) throw new ApiError(0, 'NETWORK', 'Нет связи больше 30 минут — выйдите на связь, очередь сканов ждёт отправки');
+      const r = await postOrQueue<Task>(api, queue, `/wms/pick-tasks/${t!.task_id}/scan`, p, `${p.barcode} ×${p.weight_g ?? p.qty}`);
+      if (!r.queued) return r.data;
+      // без связи: отмечаем локально, сервер подтвердит при отправке очереди
+      return applyLocal(t!, p);
+    },
     onSuccess: (data) => {
       qc.setQueryData(['pick-next'], data);
       setItem(null);
@@ -47,6 +72,7 @@ export function Picking() {
       beep(false);
     },
   });
+  const offline = queue.items.length > 0;
   const missing = useMutation({
     mutationFn: (p: { order_item_id: string; decision?: 'auto' | 'remove' }) => api.post<Task>(`/wms/pick-tasks/${t!.task_id}/missing`, p),
     onSuccess: (data) => {
@@ -61,6 +87,7 @@ export function Picking() {
     onSuccess: (l) => {
       setLabel(l);
       setCell(null);
+      localStorage.removeItem('dark.picker.task');
       qc.setQueryData(['pick-next'], null);
     },
     onError: setError,
@@ -132,6 +159,16 @@ export function Picking() {
       </div>
       {t.comment && <div className="banner">{t.comment}</div>}
       <ErrorBanner error={error} />
+      {offline && (
+        <div className="banner banner-error">
+          Нет связи: {queue.items.length} скан(ов) в очереди, отправятся автоматически. Завершить сборку можно после отправки.
+        </div>
+      )}
+      {queue.failed.map((f) => (
+        <div key={f.key} className="banner banner-error" onClick={queue.clearFailed}>
+          Скан {f.label} не принят сервером: {f.error}. Пересоберите позицию.
+        </div>
+      ))}
       <div className="muted">Ячейка: {cell ? <b style={{ color: 'var(--text)' }}>{cell}</b> : 'отсканируйте ячейку'}</div>
       {t.items.map((i) => (
         <Card key={i.order_item_id} tone={i.status === 'picked' ? 'done' : i.status === 'missing' ? 'red' : cell && i.cells.some((c) => c.cell_code === cell) ? 'yellow' : undefined} onClick={() => { if (i.status === 'pending') setItem(i); }}>
@@ -167,7 +204,7 @@ export function Picking() {
             <div className="muted">Отсканируйте ячейку и товар, или отметьте «нет на полке»</div>
           )}
           <div className="row">
-            <Button danger onClick={() => missing.mutate({ order_item_id: item.order_item_id })}>
+            <Button danger disabled={offline} onClick={() => missing.mutate({ order_item_id: item.order_item_id })}>
               Нет на полке
             </Button>
             <Button onClick={() => setItem(null)}>Закрыть</Button>
@@ -175,7 +212,7 @@ export function Picking() {
         </Card>
       )}
       {pending.length === 0 && (
-        <Button big primary disabled={complete.isPending} onClick={() => complete.mutate()}>
+        <Button big primary disabled={complete.isPending || offline} onClick={() => complete.mutate()}>
           Завершить сборку и напечатать ярлык
         </Button>
       )}
@@ -194,4 +231,19 @@ function beep(ok: boolean) {
   } catch {
     /* без звука */
   }
+}
+
+/** Локальное применение скана без связи: та же логика засчитывания, что на сервере. */
+function applyLocal(t: Task, p: { barcode: string; qty: number; weight_g?: number }): Task {
+  let done = false;
+  return {
+    ...t,
+    items: t.items.map((i) => {
+      if (done || i.status !== 'pending' || !i.barcodes.includes(p.barcode)) return i;
+      done = true;
+      if (i.is_weighted) return { ...i, qty_picked: p.weight_g ?? 0, status: 'picked' };
+      const picked = Math.min(i.qty_ordered, i.qty_picked + p.qty);
+      return { ...i, qty_picked: picked, status: picked >= i.qty_ordered ? 'picked' : 'pending' };
+    }),
+  };
 }

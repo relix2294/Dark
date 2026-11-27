@@ -7,6 +7,8 @@ export const TOPICS = [
   'payment.captured',
   'payment.failed',
   'payment.refunded',
+  'payment.hold_expiring',
+  'payment.reconcile_mismatch',
   'stock.low',
   'stock.out',
   'task.offered',

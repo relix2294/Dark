@@ -22,7 +22,7 @@ export function Audit() {
           </tr>
         </thead>
         <tbody>
-          {[...(q.data ?? [])].reverse().map((r) => (
+          {(q.data ?? []).map((r) => (
             <tr key={r.id}>
               <td>{dateTime(r.createdAt)}</td>
               <td className="muted">{r.actorId?.slice(0, 8) ?? r.actorType}</td>
