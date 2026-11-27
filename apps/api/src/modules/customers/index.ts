@@ -1,0 +1,66 @@
+import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { eq } from 'drizzle-orm';
+import { AuthResponse, DcAuthRequest, StaffLoginRequest } from '@dark/contracts';
+import type { AppDeps } from '../../app.js';
+import { customer, userStaff } from '../../shared/db/schema/index.js';
+import { AppError } from '../../shared/errors/index.js';
+import { verifyPin } from '../../shared/auth/index.js';
+
+/**
+ * Модуль customers: вход клиента (обмен токена DC Next) и вход персонала (телефон + PIN).
+ * Публичный интерфейс для других модулей — только функции ниже, не таблицы.
+ */
+export async function findCustomerById(deps: AppDeps, id: string) {
+  const [c] = await deps.db.select().from(customer).where(eq(customer.id, id));
+  return c ?? null;
+}
+
+/**
+ * Проверка токена DC Next. Контракт банка не получен: пока принимаем токен вида `dc:<dc_user_id>`
+ * (только не в production). Реальная проверка — за адаптером, как и платежи.
+ */
+async function verifyDcToken(deps: AppDeps, token: string): Promise<{ dcUserId: string; phoneMasked?: string; name?: string }> {
+  if (deps.config.NODE_ENV !== 'production' && token.startsWith('dc:')) {
+    return { dcUserId: token.slice(3) };
+  }
+  throw new AppError('UNAUTHORIZED', 'Токен DC Next не принят');
+}
+
+export async function registerCustomers(app: FastifyInstance, deps: AppDeps) {
+  const r = app.withTypeProvider<ZodTypeProvider>();
+
+  r.post(
+    '/auth/dc',
+    {
+      config: { idempotency: false },
+      schema: { tags: ['auth'], body: DcAuthRequest, response: { 200: AuthResponse } },
+    },
+    async (req) => {
+      const dc = await verifyDcToken(deps, req.body.dc_token);
+      const [c] = await deps.db
+        .insert(customer)
+        .values({ dcUserId: dc.dcUserId, phoneMasked: dc.phoneMasked ?? null, name: dc.name ?? null })
+        .onConflictDoUpdate({ target: customer.dcUserId, set: { updatedAt: deps.clock.now() } })
+        .returning();
+      const { token, expiresAt } = await deps.tokens.sign({ kind: 'customer', customer_id: c!.id, dc_user_id: c!.dcUserId });
+      return { token, expires_at: expiresAt.toISOString() };
+    },
+  );
+
+  r.post(
+    '/auth/staff',
+    {
+      config: { idempotency: false },
+      schema: { tags: ['auth'], body: StaffLoginRequest, response: { 200: AuthResponse } },
+    },
+    async (req) => {
+      const [u] = await deps.db.select().from(userStaff).where(eq(userStaff.phone, req.body.phone));
+      if (!u || !u.isActive || !verifyPin(req.body.pin, u.pinHash)) {
+        throw new AppError('UNAUTHORIZED', 'Неверный телефон или PIN');
+      }
+      const { token, expiresAt } = await deps.tokens.sign({ kind: 'staff', staff_id: u.id, role: u.role, store_id: u.storeId });
+      return { token, expires_at: expiresAt.toISOString() };
+    },
+  );
+}

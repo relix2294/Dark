@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint · типы · тесты · границы модулей
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: dark
+          POSTGRES_PASSWORD: dark
+          POSTGRES_DB: dark_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dark" --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @dark/contracts build
+      - run: pnpm typecheck
+      - run: pnpm boundaries
+      - name: Миграции применяются с нуля
+        run: pnpm db:migrate
+        env:
+          DATABASE_URL: postgres://dark:dark@127.0.0.1:5432/dark_test
+      - name: Тесты (unit + сценарии приёмки против Postgres)
+        run: pnpm test
+        env:
+          TEST_DATABASE_URL: postgres://dark:dark@127.0.0.1:5432/dark_test
+      - name: Схема и миграции не расходятся
+        run: pnpm db:generate && git diff --exit-code -- apps/api/drizzle
+        env:
+          DATABASE_URL: postgres://dark:dark@127.0.0.1:5432/dark_test
+
+  image:
+    name: Docker-образ api
+    needs: check
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/dark-api:latest
+            ghcr.io/${{ github.repository_owner }}/dark-api:${{ github.sha }}

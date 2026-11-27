@@ -1,0 +1,44 @@
+/**
+ * Настраиваемые параметры (ТЗ §12). Значения по умолчанию — здесь; переопределение по точке — таблица parameter.
+ * Все длительности — в миллисекундах, проценты — числом, деньги — в дирамах.
+ */
+export const DEFAULT_PARAMS = {
+  LAB_PICK_SLA_MS: 2 * 60_000,
+  LAB_PROMISE_MS: 15 * 60_000,
+  SOR_PROMISE_MS: 45 * 60_000,
+  SOR_MAX_PROMISE_MS: 60 * 60_000,
+  SOR_PREASSIGN_MS: 3 * 60_000,
+  SOR_SLACK_BUFFER_MS: 10 * 60_000,
+  LAB_RESERVE: 1,
+  RETURN_LOOKAHEAD_MS: 2 * 60_000,
+  OFFER_TIMEOUT_MS: 30_000,
+  AUTO_ACCEPT: true,
+  NO_COURIER_WARN_MS: 3 * 60_000,
+  NO_COURIER_ALERT_MS: 7 * 60_000,
+  BATCH_MAX: 2,
+  BATCH_DETOUR_MS: 4 * 60_000,
+  HOLD_BUFFER_PCT: 10,
+  REFUND_LIMIT_DIRAMS: 200 * 100,
+  SOR_CANCEL_FEE_PCT: 100,
+  NO_SHOW_WAIT_MS: 5 * 60_000,
+  DELIVERY_GEOFENCE_M: 150,
+  MIN_SHELF_LIFE_PCT: 20,
+  STOCKTAKE_TOLERANCE_PCT: 2,
+  STATION_CAPACITY: { pizza: 4, grill: 6, cold: 8, pack: 10 } as Record<string, number>,
+  LAST_ORDER_BEFORE_CLOSE_MS: { LAB: 20 * 60_000, SOR: 50 * 60_000 } as Record<string, number>,
+  /** Таймаут ответа банка на hold (ТЗ §5). */
+  PAYMENT_HOLD_TIMEOUT_MS: 10_000,
+} as const;
+
+export type Params = { -readonly [K in keyof typeof DEFAULT_PARAMS]: (typeof DEFAULT_PARAMS)[K] };
+export type ParamKey = keyof Params;
+
+export function resolveParams(overrides: Partial<Record<ParamKey, unknown>>): Params {
+  const out = { ...DEFAULT_PARAMS } as Params;
+  for (const [k, v] of Object.entries(overrides)) {
+    if (k in DEFAULT_PARAMS && v !== undefined && typeof v === typeof DEFAULT_PARAMS[k as ParamKey]) {
+      (out as Record<string, unknown>)[k] = v;
+    }
+  }
+  return out;
+}

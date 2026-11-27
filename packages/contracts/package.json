@@ -1,0 +1,19 @@
+{
+  "name": "@dark/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Типизированный контракт API (zod). Единственный источник типов для сервера и всех клиентов.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" } },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "echo 'lint: contracts ok'",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": { "zod": "^4.1.0" },
+  "devDependencies": { "typescript": "^5.9.0", "vitest": "^3.2.0" }
+}

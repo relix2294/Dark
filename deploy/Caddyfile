@@ -1,0 +1,26 @@
+# TLS автоматически (Let's Encrypt). /api и /docs → api, остальное — статика фронтов из deploy/www/<app>
+{$DOMAIN} {
+	encode zstd gzip
+
+	handle /api/* {
+		reverse_proxy api:3000
+	}
+	handle /docs* {
+		reverse_proxy api:3000
+	}
+	handle /health {
+		reverse_proxy api:3000
+	}
+
+	# Фронты: /store (витрина), /office (админка + пульт), /kds (кухня), /picker (терминал). SPA fallback.
+	@spa path /store/* /office/* /kds/* /picker/*
+	handle @spa {
+		root * /srv/www
+		try_files {path} {path}/ /{http.request.uri.path.0}/index.html
+		file_server
+	}
+	handle {
+		root * /srv/www
+		file_server
+	}
+}

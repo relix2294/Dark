@@ -1,0 +1,308 @@
+import { and, eq, sql } from 'drizzle-orm';
+import type { Brand, CartResponse, CreateOrderRequest, CustomerPrincipal, OrderStatus, OrderView } from '@dark/contracts';
+import type { AppDeps } from '../../app.js';
+import type { Tx } from '../../shared/db/client.js';
+import { address, customer, order, orderItem, orderStatusLog, payment, paymentOp, stockLot, stockMove } from '../../shared/db/schema/index.js';
+import { AppError, notFound } from '../../shared/errors/index.js';
+import { publish } from '../../shared/events/outbox.js';
+import { holdAmount } from '../../shared/money.js';
+import { DEFAULT_PARAMS } from '../../shared/params/index.js';
+import { getStore, isOpenAt, priceProducts, resolveZone } from '../catalog/index.js';
+import { applyPromo, countUses, findPromo, recordUse } from '../promo/index.js';
+import { planReserve } from '../wms/index.js';
+import { priceCart } from './pricing.js';
+import { CUSTOMER_CANCELLABLE, orderMachine } from './state-machine.js';
+
+/**
+ * Сервис заказов — сценарий «корзина → заказ → холд → резерв» (ТЗ §4, §5, §7, §11).
+ * Деньги и остатки меняются только внутри транзакции.
+ */
+
+type CartCtx = { brand: Brand; store_id: string; address_id?: string | undefined; items: { product_id: string; qty: number }[]; promo_code?: string | undefined };
+
+export async function quoteCart(deps: AppDeps, me: CustomerPrincipal, input: CartCtx): Promise<CartResponse> {
+  return deps.db.transaction((tx) => quoteInTx(tx, deps, me, input)).then((q) => q.cart);
+}
+
+async function quoteInTx(tx: Tx, deps: AppDeps, me: CustomerPrincipal, input: CartCtx) {
+  const store = await getStore(deps, input.store_id);
+  let fee = 0;
+  if (input.address_id) {
+    const [addr] = await tx.select().from(address).where(and(eq(address.id, input.address_id), eq(address.customerId, me.customer_id)));
+    if (!addr) throw notFound('Адрес', input.address_id);
+    const { zone, store: zoneStore } = await resolveZone(deps, input.brand, addr);
+    if (zoneStore.id !== store.id) throw new AppError('OUT_OF_ZONE', 'Адрес обслуживает другая точка', { store_id: zoneStore.id });
+    fee = zone.feeDirams;
+  }
+  const products = await priceProducts(deps, store.id, input.items.map((i) => i.product_id));
+  const draft = priceCart(input.items, products, fee, 0, { applied: null, error: null });
+
+  let discount = 0;
+  let promoState: { applied: string | null; error: string | null } = { applied: null, error: null };
+  let promoRule = null;
+  if (input.promo_code) {
+    promoRule = await findPromo(tx, input.promo_code);
+    if (!promoRule) promoState = { applied: null, error: 'Промокод не найден' };
+    else {
+      const [c] = await tx.select().from(customer).where(eq(customer.id, me.customer_id));
+      const uses = await countUses(tx, promoRule.id, me.customer_id);
+      const res = applyPromo(promoRule, {
+        brand: input.brand,
+        itemsTotal: draft.items_total_dirams,
+        deliveryFee: fee,
+        now: deps.clock.now(),
+        customerIsNew: (c?.ordersCount ?? 0) === 0,
+        customerUses: uses,
+        addressNewcomerUses: 0, // TODO(promo): подсчёт новичков по адресу (ТЗ §11)
+      });
+      if ('error' in res) promoState = { applied: null, error: res.error };
+      else {
+        discount = res.discount;
+        promoState = { applied: promoRule.code, error: null };
+      }
+    }
+  }
+  const cart = priceCart(input.items, products, fee, discount, promoState);
+  return { cart, products, store, promoRule: promoState.applied ? promoRule : null, discount };
+}
+
+export async function createOrder(deps: AppDeps, me: CustomerPrincipal, input: CreateOrderRequest): Promise<OrderView> {
+  const params = DEFAULT_PARAMS; // TODO(params): resolveParams по точке
+  const now = deps.clock.now();
+
+  // Шаг 1: в одной транзакции — проверка корзины, order(created), payment(hold_pending), payment_op
+  const created = await deps.db.transaction(async (tx) => {
+    const q = await quoteInTx(tx, deps, me, input);
+    if (!isOpenAt(q.store.workHours, now, deps.config.DISPLAY_TZ)) throw new AppError('STORE_CLOSED', 'Точка закрыта');
+    if (q.cart.unavailable_product_ids.length) {
+      throw new AppError('OUT_OF_STOCK', 'Часть товаров недоступна', { product_ids: q.cart.unavailable_product_ids });
+    }
+    if (q.cart.total_dirams !== input.expected_total_dirams) {
+      throw new AppError('PRICE_CHANGED', 'Сумма изменилась, подтвердите новую корзину', { cart: q.cart });
+    }
+    const [zoneRow] = await tx.select().from(address).where(eq(address.id, input.address_id));
+    const { zone } = await resolveZone(deps, input.brand, zoneRow!);
+    if (q.cart.items_total_dirams < zone.minOrderDirams) {
+      throw new AppError('MIN_ORDER', 'Сумма меньше минимальной', { min_order_dirams: zone.minOrderDirams });
+    }
+
+    const number = await nextOrderNumber(tx, input.brand);
+    const promise = input.brand === 'LAB' ? params.LAB_PROMISE_MS : params.SOR_PROMISE_MS;
+    const [o] = await tx
+      .insert(order)
+      .values({
+        number,
+        brand: input.brand,
+        storeId: q.store.id,
+        customerId: me.customer_id,
+        addressSnapshot: zoneRow as Record<string, unknown>,
+        status: 'created',
+        itemsTotalDirams: q.cart.items_total_dirams,
+        deliveryFeeDirams: q.cart.delivery_fee_dirams,
+        discountDirams: q.cart.discount_dirams,
+        totalDirams: q.cart.total_dirams,
+        promisedAt: new Date(now.getTime() + promise),
+        comment: input.comment,
+      })
+      .returning();
+    const items = await tx
+      .insert(orderItem)
+      .values(
+        input.items.map((i) => {
+          const p = q.products.get(i.product_id)!;
+          return {
+            orderId: o!.id,
+            productId: i.product_id,
+            nameSnapshot: p.nameRu,
+            qtyOrdered: i.qty,
+            priceDirams: p.priceDirams,
+            replacePolicy: i.replace_policy,
+            modifiers: i.modifiers ?? null,
+          };
+        }),
+      )
+      .returning();
+    await tx.insert(orderStatusLog).values({ orderId: o!.id, from: null, to: 'created', actorType: 'customer', actorId: me.customer_id });
+    if (q.promoRule) await recordUse(tx, q.promoRule, me.customer_id, o!.id, q.discount);
+    // Резерв с блокировкой строк партий ДО холда: второй покупатель последней единицы получает OUT_OF_STOCK,
+    // деньги не трогаются (ТЗ §11). При отказе банка резерв снимается в tx2.
+    if (input.brand === 'LAB') await reserveItems(tx, deps, q.store.id, o!.id, items, params.MIN_SHELF_LIFE_PCT);
+
+    const hasWeighted = input.items.some((i) => q.products.get(i.product_id)?.isWeighted);
+    const hold = holdAmount(q.cart.total_dirams, input.brand === 'LAB' && hasWeighted, params.HOLD_BUFFER_PCT);
+    const [pay] = await tx.insert(payment).values({ orderId: o!.id, status: 'hold_pending', holdDirams: hold }).returning();
+    const idemKey = `${o!.id}:hold:1`;
+    await tx.insert(paymentOp).values({ paymentId: pay!.id, type: 'hold', amountDirams: hold, idempotencyKey: idemKey });
+    await publish(tx, { topic: 'order.created', aggregateType: 'order', aggregateId: o!.id, payload: { number, brand: input.brand, store_id: q.store.id } });
+    return { o: o!, items, pay: pay!, idemKey, hold, products: q.products };
+  });
+
+  // Шаг 2: вызов банка вне транзакции БД (таймаут PAYMENT_HOLD_TIMEOUT_MS)
+  const res = await withTimeout(
+    deps.wallet.hold({ dcUserId: me.dc_user_id, amount: created.hold, orderNumber: created.o.number, idempotencyKey: created.idemKey }),
+    params.PAYMENT_HOLD_TIMEOUT_MS,
+  );
+
+  // Шаг 3: результат — в транзакции: held + paid_hold + резерв, либо failed
+  await deps.db.transaction(async (tx) => {
+    if (res.ok) {
+      await tx.update(payment).set({ status: 'held', providerRef: res.providerRef, holdExpiresAt: res.expiresAt }).where(eq(payment.id, created.pay.id));
+      await tx.update(paymentOp).set({ status: 'ok' }).where(eq(paymentOp.idempotencyKey, created.idemKey));
+      await transition(tx, created.o.id, 'created', 'paid_hold', 'system', null);
+      await publish(tx, { topic: 'payment.held', aggregateType: 'payment', aggregateId: created.pay.id, payload: { order_id: created.o.id, amount: created.hold } });
+    } else if (res.reason === 'timeout') {
+      // заказ остаётся created: сверка опросит status() через 5/15/30 с (ТЗ §5 п.4)
+      await tx.update(payment).set({ lastError: res.message }).where(eq(payment.id, created.pay.id));
+    } else {
+      await tx.update(payment).set({ status: 'failed', lastError: res.message }).where(eq(payment.id, created.pay.id));
+      await tx.update(paymentOp).set({ status: 'failed' }).where(eq(paymentOp.idempotencyKey, created.idemKey));
+      await unreserveAll(tx, created.o.id);
+      await transition(tx, created.o.id, 'created', 'payment_failed', 'system', null, { reason: res.reason });
+      await publish(tx, { topic: 'payment.failed', aggregateType: 'payment', aggregateId: created.pay.id, payload: { order_id: created.o.id, reason: res.reason } });
+    }
+  });
+
+  if (!res.ok && res.reason !== 'timeout') {
+    throw new AppError('PAYMENT_DECLINED', 'Оплата отклонена', { order_id: created.o.id, reason: res.reason });
+  }
+  return getOrderView(deps, created.o.id, me);
+}
+
+/** Резерв FEFO с блокировкой строк партий: второй покупатель последней единицы получает OUT_OF_STOCK (ТЗ §11). */
+async function reserveItems(
+  tx: Tx,
+  deps: AppDeps,
+  storeId: string,
+  orderId: string,
+  items: { id: string; productId: string; qtyOrdered: number }[],
+  minShelfLifePct: number,
+) {
+  const now = deps.clock.now();
+  const short: string[] = [];
+  for (const it of items) {
+    const lots = await tx
+      .select()
+      .from(stockLot)
+      .where(and(eq(stockLot.storeId, storeId), eq(stockLot.productId, it.productId), sql`${stockLot.qty} > ${stockLot.reservedQty}`))
+      .for('update');
+    const { plan, shortage } = planReserve(
+      lots.map((l) => ({ id: l.id, qty: l.qty, reservedQty: l.reservedQty, expiresAt: l.expiresAt, receivedAt: l.createdAt, shelfLifeDays: null })),
+      it.qtyOrdered,
+      now,
+      minShelfLifePct,
+    );
+    if (shortage > 0) {
+      short.push(it.productId);
+      continue;
+    }
+    for (const r of plan) {
+      await tx.update(stockLot).set({ reservedQty: sql`${stockLot.reservedQty} + ${r.qty}` }).where(eq(stockLot.id, r.lotId));
+      await tx.insert(stockMove).values({ storeId, productId: it.productId, lotId: r.lotId, type: 'reserve', qty: r.qty, refType: 'order', refId: orderId });
+    }
+  }
+  if (short.length) throw new AppError('OUT_OF_STOCK', 'Товар закончился во время оформления', { product_ids: short });
+}
+
+export async function transition(
+  tx: Tx,
+  orderId: string,
+  from: OrderStatus,
+  to: OrderStatus,
+  actorType: 'customer' | 'staff' | 'system',
+  actorId: string | null,
+  meta?: Record<string, unknown>,
+) {
+  orderMachine.assert(from, to, actorType);
+  const updated = await tx
+    .update(order)
+    .set({ status: to, updatedAt: new Date(), ...(to === 'ready' ? { readyAt: new Date() } : {}), ...(to === 'delivered' ? { deliveredAt: new Date() } : {}) })
+    .where(and(eq(order.id, orderId), eq(order.status, from)))
+    .returning({ id: order.id });
+  if (updated.length === 0) throw new AppError('INVALID_TRANSITION', `Заказ уже не в статусе ${from}`, { from, to });
+  await tx.insert(orderStatusLog).values({ orderId, from, to, actorType, actorId, meta: meta ?? null });
+  await publish(tx, { topic: 'order.status_changed', aggregateType: 'order', aggregateId: orderId, payload: { from, to, actor_type: actorType } });
+}
+
+export async function cancelByCustomer(deps: AppDeps, me: CustomerPrincipal, orderId: string, reason?: string): Promise<OrderView> {
+  await deps.db.transaction(async (tx) => {
+    const [o] = await tx.select().from(order).where(and(eq(order.id, orderId), eq(order.customerId, me.customer_id))).for('update');
+    if (!o) throw notFound('Заказ', orderId);
+    if (!CUSTOMER_CANCELLABLE.has(o.status)) {
+      orderMachine.assert(o.status, 'cancelled', 'customer');
+      throw new AppError('FORBIDDEN', 'Отмена после начала сборки — только оператор', { status: o.status });
+    }
+    await unreserveAll(tx, o.id);
+    const [pay] = await tx.select().from(payment).where(eq(payment.orderId, o.id));
+    if (pay?.status === 'held' && pay.providerRef) {
+      const key = `${o.id}:release:1`;
+      await tx.insert(paymentOp).values({ paymentId: pay.id, type: 'release', amountDirams: pay.holdDirams, idempotencyKey: key }).onConflictDoNothing();
+      const r = await deps.wallet.release({ providerRef: pay.providerRef, idempotencyKey: key });
+      await tx.update(payment).set({ status: r.ok ? 'released' : pay.status, lastError: r.ok ? null : r.message }).where(eq(payment.id, pay.id));
+      await tx.update(paymentOp).set({ status: r.ok ? 'ok' : 'failed' }).where(eq(paymentOp.idempotencyKey, key));
+    }
+    await tx.update(order).set({ cancelReason: reason ?? 'клиент' }).where(eq(order.id, o.id));
+    await transition(tx, o.id, o.status, 'cancelled', 'customer', me.customer_id, { reason });
+  });
+  return getOrderView(deps, orderId, me);
+}
+
+async function unreserveAll(tx: Tx, orderId: string) {
+  const moves = await tx.select().from(stockMove).where(and(eq(stockMove.refType, 'order'), eq(stockMove.refId, orderId), eq(stockMove.type, 'reserve')));
+  for (const m of moves) {
+    if (!m.lotId) continue;
+    await tx.update(stockLot).set({ reservedQty: sql`${stockLot.reservedQty} - ${m.qty}` }).where(eq(stockLot.id, m.lotId));
+    await tx.insert(stockMove).values({ storeId: m.storeId, productId: m.productId, lotId: m.lotId, type: 'unreserve', qty: m.qty, refType: 'order', refId: orderId });
+  }
+}
+
+export async function getOrderView(deps: AppDeps, orderId: string, me: CustomerPrincipal): Promise<OrderView> {
+  const [o] = await deps.db.select().from(order).where(and(eq(order.id, orderId), eq(order.customerId, me.customer_id)));
+  if (!o) throw notFound('Заказ', orderId);
+  const items = await deps.db.select().from(orderItem).where(eq(orderItem.orderId, o.id));
+  return {
+    id: o.id,
+    number: o.number,
+    brand: o.brand,
+    store_id: o.storeId,
+    status: o.status,
+    items: items.map((i) => ({
+      id: i.id,
+      product_id: i.productId,
+      name_snapshot: i.nameSnapshot,
+      qty_ordered: i.qtyOrdered,
+      qty_picked: i.qtyPicked,
+      price_dirams: i.priceDirams,
+      status: i.status,
+      replaced_by_item_id: i.replacedByItemId,
+    })),
+    items_total_dirams: o.itemsTotalDirams,
+    delivery_fee_dirams: o.deliveryFeeDirams,
+    discount_dirams: o.discountDirams,
+    total_dirams: o.totalDirams,
+    captured_dirams: o.capturedDirams,
+    promised_at: o.promisedAt?.toISOString() ?? null,
+    ready_at: o.readyAt?.toISOString() ?? null,
+    delivered_at: o.deliveredAt?.toISOString() ?? null,
+    courier: null, // TODO(dispatch): имя и позиция курьера из delivery_task
+    created_at: o.createdAt.toISOString(),
+  };
+}
+
+/** Номер заказа: L-000123 / S-000123, последовательность в БД на бренд. */
+async function nextOrderNumber(tx: Tx, brand: Brand): Promise<string> {
+  const seq = brand === 'LAB' ? 'order_number_lab' : 'order_number_sor';
+  const [r] = await tx.execute<{ n: string }>(sql`select nextval(${seq}) as n`).then((x) => x.rows);
+  return `${brand === 'LAB' ? 'L' : 'S'}-${String(r!.n).padStart(6, '0')}`;
+}
+
+async function withTimeout<T extends { ok: boolean }>(p: Promise<T>, ms: number): Promise<T | { ok: false; reason: 'timeout'; message: string }> {
+  let t: NodeJS.Timeout | undefined;
+  const timeout = new Promise<{ ok: false; reason: 'timeout'; message: string }>((resolve) => {
+    t = setTimeout(() => resolve({ ok: false, reason: 'timeout', message: `нет ответа банка за ${ms} мс` }), ms);
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    clearTimeout(t);
+  }
+}

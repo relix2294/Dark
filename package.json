@@ -1,0 +1,25 @@
+{
+  "name": "dark",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Lablabu (дарк-стор) + Sor Box (кухня): один бэкенд, два бренда, много точек",
+  "packageManager": "pnpm@10.28.0",
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "check": "turbo run lint typecheck test",
+    "boundaries": "node scripts/check-boundaries.mjs",
+    "db:generate": "pnpm --filter @dark/api db:generate",
+    "db:migrate": "pnpm --filter @dark/api db:migrate",
+    "db:seed": "pnpm --filter @dark/api db:seed",
+    "api": "pnpm --filter @dark/api dev"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0",
+    "typescript": "^5.9.0"
+  }
+}
