@@ -12,6 +12,7 @@ export const ALERT_TOPICS = [
   'payment.hold_expiring',
   'order.rated',
   'device.offline',
+  'payout.failed',
 ] as const;
 type AlertTopic = (typeof ALERT_TOPICS)[number];
 type Level = 'critical' | 'warning' | 'info';
@@ -48,6 +49,8 @@ export function describeAlert(topic: AlertTopic, p: Record<string, unknown>, ord
         level: 'critical',
         text: `${p.app === 'kds' ? 'Экран кухни' : 'Терминал сборщика'}${p.staff_name ? ` (${String(p.staff_name)})` : ''} не на связи с ${hhmm(p.last_seen_at)}`,
       };
+    case 'payout.failed':
+      return { level: 'warning', text: `Выплата курьеру ${String(p.courier_name ?? '')} (${(n(p.amount_dirams) / 100).toFixed(2)} с) не прошла: ${String(p.reason ?? '')}` };
     case 'payment.hold_expiring':
       return { level: 'warning', text: `${ord}: блокировка оплаты истекает в ${hhmm(p.expires_at)}` };
   }

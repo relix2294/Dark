@@ -3,6 +3,10 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
+  BonusRequest,
+  CourierIdParams,
+  PayoutListView,
+  PayoutQuery,
   ConsoleDevicesView,
   HeartbeatRequest,
   ConsoleAlertsQuery,
@@ -24,7 +28,7 @@ import {
 import type { AppDeps } from '../../app.js';
 import { cancelByStaff, consoleOrders } from '../orders/index.js';
 import { confirmDeliveredByLead, consoleCouriers, manualAssign, markReturned, unassign } from '../dispatch/index.js';
-import { refund } from '../payments/index.js';
+import { createBonus, listPayouts, refund, retryPayout } from '../payments/index.js';
 export { registerReports } from './reports.js';
 import { storeAlerts } from './alerts.js';
 import { heartbeat, storeDevices } from './devices.js';
@@ -79,6 +83,23 @@ export async function registerBackoffice(app: FastifyInstance, deps: AppDeps) {
     if (req.principal?.kind !== 'staff') throw new AppError('FORBIDDEN', 'Только для персонала');
     await heartbeat(deps, req.principal, req.body);
     return reply.status(204).send();
+  });
+  // ---- выплаты курьерам: только безналично, на кошелёк DC ----
+  r.get('/admin/stores/:store_id/payouts', { schema: { tags: ['finance'], security: sec, params: ConsoleStoreParams, querystring: PayoutQuery, response: { 200: PayoutListView } } }, async (req) => {
+    requireStaff(req.principal, 'finance.reports', req.params.store_id);
+    return listPayouts(deps, req.params.store_id, req.query.from, req.query.to);
+  });
+  r.post('/admin/payouts/:id/retry', { schema: { tags: ['finance'], security: sec, params: z.object({ id: z.uuid() }) } }, async (req) => {
+    const me = requireStaff(req.principal, 'payouts.manage');
+    const p = await retryPayout(deps, me, req.params.id);
+    await audit(deps, { actorType: 'staff', actorId: me.staff_id, action: 'payout.retry', objectType: 'courier_payout', objectId: p.id, after: { status: 'pending' }, reason: 'повтор выплаты', storeId: p.storeId });
+    return { ok: true };
+  });
+  r.post('/admin/couriers/:courier_id/bonus', { schema: { tags: ['finance'], security: sec, params: CourierIdParams, body: BonusRequest } }, async (req, reply) => {
+    const me = requireStaff(req.principal, 'payouts.manage');
+    const p = await createBonus(deps, me, req.params.courier_id, req.body.amount_dirams, req.body.reason);
+    await audit(deps, { actorType: 'staff', actorId: me.staff_id, action: 'payout.bonus', objectType: 'courier_payout', objectId: p.id, after: { courier_id: p.courierId, amount_dirams: p.amountDirams }, reason: req.body.reason, storeId: p.storeId });
+    return reply.status(201).send({ id: p.id });
   });
   r.post('/console/stores/:store_id/orders/:id/assign', { schema: { tags, security: sec, params: ConsoleOrderParams, body: ManualAssignRequest, response: { 200: DeliveryTaskView } } }, async (req) => {
     const me = requireStaff(req.principal, 'dispatch.manual_assign', req.params.store_id);

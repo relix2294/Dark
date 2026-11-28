@@ -17,7 +17,7 @@ export const OWNERSHIP = {
   catalog: ['store', 'deliveryZone', 'category', 'product', 'price', 'dish'],
   customers: ['customer', 'address', 'userStaff', 'authAttempt'],
   orders: ['order', 'orderItem', 'orderStatusLog', 'orderRating'],
-  payments: ['payment', 'paymentOp'],
+  payments: ['payment', 'paymentOp', 'courierPayout'],
   promo: ['promo', 'promoUse'],
   wms: ['cell', 'supply', 'supplyItem', 'stockLot', 'stockMove', 'stocktake', 'stocktakeLine', 'pickTask'],
   kds: ['kdsItem', 'stopList'],

@@ -20,5 +20,7 @@ export const TOPICS = [
   'kds.item_late',
   'dispatch.no_courier',
   'device.offline',
+  'payout.sent',
+  'payout.failed',
 ] as const;
 export type Topic = (typeof TOPICS)[number];

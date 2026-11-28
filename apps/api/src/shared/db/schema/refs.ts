@@ -98,6 +98,8 @@ export const userStaff = pgTable('user_staff', {
   storeId: uuid('store_id').references(() => store.id),
   pinHash: text('pin_hash').notNull(),
   isActive: boolean('is_active').notNull().default(true),
+  /** Кошелёк DC сотрудника — для выплат курьеру. */
+  dcUserId: text('dc_user_id').unique(),
 });
 
 export const customer = pgTable('customer', {

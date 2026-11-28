@@ -19,6 +19,8 @@ export interface WalletAdapter {
   release(input: { providerRef: string; idempotencyKey: string }): Promise<OpResult>;
   refund(input: { providerRef: string; amount: Dirams; idempotencyKey: string }): Promise<OpResult>;
   status(providerRef: string): Promise<ProviderStatus>;
+  /** Выплата на кошелёк DC (курьеру). Все деньги — только через DC, наличных нет. */
+  payout(input: { dcUserId: string; amount: Dirams; reference: string; idempotencyKey: string }): Promise<OpResult>;
 }
 
 /** Параметры, которые нужно получить от банка (ТЗ §5) — фиксируем как конфиг адаптера. */

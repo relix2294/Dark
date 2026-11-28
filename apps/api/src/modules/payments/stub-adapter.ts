@@ -66,6 +66,22 @@ export class StubWalletAdapter implements WalletAdapter {
     return this.state.get(providerRef)?.status ?? 'unknown';
   }
 
+  /** Выплаты: ключ идемпотентности → результат; кошелёк с суффиксом -blocked — отказ банка, -timeout — нет ответа. */
+  readonly payouts: { dcUserId: string; amount: number; reference: string }[] = [];
+  async payout(input: { dcUserId: string; amount: number; reference: string; idempotencyKey: string }): Promise<OpResult> {
+    const cached = this.ops.get(`payout:${input.idempotencyKey}`);
+    if (cached) return cached as OpResult;
+    let r: OpResult;
+    if (input.dcUserId.endsWith('-blocked')) r = { ok: false, reason: 'rejected', message: 'кошелёк заблокирован' };
+    else if (input.dcUserId.endsWith('-timeout')) return { ok: false, reason: 'timeout', message: 'нет ответа банка' };
+    else {
+      r = { ok: true, providerRef: `stub_payout_${randomUUID()}` };
+      this.payouts.push({ dcUserId: input.dcUserId, amount: input.amount, reference: input.reference });
+    }
+    this.ops.set(`payout:${input.idempotencyKey}`, r);
+    return r;
+  }
+
   private op(
     key: string,
     ref: string,

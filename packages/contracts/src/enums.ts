@@ -149,3 +149,10 @@ export const DISPATCH_REASON_RU: Record<DispatchReason, string> = {
 export const CALL_ROLE_VALUES = ['courier', 'customer'] as const;
 export const CallRole = z.enum(CALL_ROLE_VALUES);
 export type CallRole = z.infer<typeof CallRole>;
+
+/** Выплаты курьерам — только безналично, на кошелёк DC (решение заказчика: наличных курьер не берёт). */
+export const PAYOUT_KIND_VALUES = ['shift', 'bonus'] as const;
+export const PayoutKind = z.enum(PAYOUT_KIND_VALUES);
+export const PAYOUT_STATUS_VALUES = ['pending', 'sent', 'failed', 'no_wallet'] as const;
+export const PayoutStatus = z.enum(PAYOUT_STATUS_VALUES);
+export type PayoutStatus = z.infer<typeof PayoutStatus>;

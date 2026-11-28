@@ -59,7 +59,7 @@ export function Staff({ storeId }: { storeId: string }) {
 
 function Editor({ storeId, roles, person, onClose }: { storeId: string; roles: StaffRole[]; person: Person | null; onClose: () => void }) {
   const { api } = useStaff();
-  const [f, setF] = useState({ name: person?.name ?? '', phone: person?.phone ?? '+992', role: person?.role ?? 'picker', pin: '', is_active: person?.is_active ?? true, reason: '' });
+  const [f, setF] = useState({ name: person?.name ?? '', phone: person?.phone ?? '+992', role: person?.role ?? 'picker', pin: '', is_active: person?.is_active ?? true, reason: '', dc: person?.dc_user_id ?? '' });
   const save = useMutation({
     mutationFn: () =>
       person
@@ -68,9 +68,10 @@ function Editor({ storeId, roles, person, onClose }: { storeId: string; roles: S
             ...(f.role !== person.role ? { role: f.role } : {}),
             ...(f.is_active !== person.is_active ? { is_active: f.is_active } : {}),
             ...(f.pin ? { pin: f.pin } : {}),
+            ...(f.dc.trim() !== (person.dc_user_id ?? '') ? { dc_user_id: f.dc.trim() || null } : {}),
             reason: f.reason,
           })
-        : api.post('/admin/staff', { name: f.name, phone: f.phone, role: f.role, pin: f.pin, store_id: ['finance', 'admin'].includes(f.role) ? null : storeId }),
+        : api.post('/admin/staff', { name: f.name, phone: f.phone, role: f.role, pin: f.pin, store_id: ['finance', 'admin'].includes(f.role) ? null : storeId, ...(f.dc.trim() ? { dc_user_id: f.dc.trim() } : {}) }),
     onSuccess: onClose,
   });
   return (
@@ -97,6 +98,11 @@ function Editor({ storeId, roles, person, onClose }: { storeId: string; roles: S
               ))}
             </select>
           </Field>
+          {f.role === 'courier' && (
+            <Field label="Кошелёк DC (для выплат — только безналично)">
+              <input className="input" value={f.dc} onChange={(e) => setF({ ...f, dc: e.target.value })} placeholder="id пользователя DC" />
+            </Field>
+          )}
           <Field label={person ? 'Новый PIN (пусто — без изменений)' : 'PIN'}>
             <input className="input" inputMode="numeric" value={f.pin} onChange={(e) => setF({ ...f, pin: e.target.value.replace(/\D/g, '').slice(0, 6) })} />
           </Field>

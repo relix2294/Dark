@@ -57,12 +57,15 @@ describe('итоги смены курьера (ТЗ §9)', () => {
     expect(r).toEqual({
       shift_started_at: T0.toISOString(), shift_ended_at: null, minutes: 90,
       trips: 2, delivered: 2, on_time: 1, returned: 1, avg_delivery_min: 15, km: 2.2,
+      // тариф по умолчанию: 5 с за доставку (и «не вышел»), 1 с за км, 0 за час
+      pay: { per_delivery_dirams: 500, per_km_dirams: 100, per_hour_dirams: 0, deliveries_dirams: 1500, km_dirams: 220, hours_dirams: 0, total_dirams: 1720 },
+      payout_status: null,
     });
 
     // смена закрыта — итоги остаются, время не растёт
     expect((await call('POST', '/api/v1/courier/shift/end', tok)).statusCode).toBe(200);
     ctx.setNow(at(200));
     r = (await call('GET', '/api/v1/courier/shift/summary', tok)).json();
-    expect(r).toMatchObject({ shift_ended_at: at(90).toISOString(), minutes: 90, delivered: 2 });
+    expect(r).toMatchObject({ shift_ended_at: at(90).toISOString(), minutes: 90, delivered: 2, payout_status: 'pending' });
   });
 });

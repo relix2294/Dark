@@ -13,6 +13,7 @@ import { markCustomerDelivered } from '../customers/index.js';
 import { captureAmountNow } from '../payments/index.js';
 import { returnPickedItems } from '../wms/index.js';
 import { courierCallStats } from '../calls/index.js';
+import { payoutForEndedShift } from './shift-summary.js';
 import { planDispatch, type FreeCourier, type PendingOrder } from './planner.js';
 import { courierMachine, taskMachine } from './state-machine.js';
 
@@ -77,7 +78,7 @@ export async function shiftStart(deps: AppDeps, me: StaffPrincipal, transport?: 
 }
 
 export async function shiftEnd(deps: AppDeps, me: StaffPrincipal) {
-  await deps.db.transaction(async (tx) => {
+  const courierId = await deps.db.transaction(async (tx) => {
     const c = await courierOf(tx, me);
     const active = await tx.select().from(deliveryTask).where(and(eq(deliveryTask.courierId, c.id), inArray(deliveryTask.status, [...TASK_ACTIVE])));
     if (active.length) throw new AppError('INVALID_TRANSITION', 'Нельзя закрыть смену с активным заданием', { task_ids: active.map((t) => t.id) });
@@ -85,7 +86,10 @@ export async function shiftEnd(deps: AppDeps, me: StaffPrincipal) {
     if (c.status === 'returning') await setCourierStatus(tx, c, 'free', 'courier');
     await setCourierStatus(tx, c, 'offline', 'courier');
     await tx.update(courierShift).set({ endedAt: deps.clock.now() }).where(and(eq(courierShift.courierId, c.id), isNull(courierShift.endedAt)));
+    return c.id;
   });
+  // оплата за смену — на кошелёк DC (только безналично); отправит воркер
+  await payoutForEndedShift(deps, courierId);
   return selfView(deps, me);
 }
 

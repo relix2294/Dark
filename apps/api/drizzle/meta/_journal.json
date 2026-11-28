@@ -71,6 +71,20 @@
       "when": 1795845244990,
       "tag": "0009_updated_at_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795845633768,
+      "tag": "0010_courier_payouts",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795845672026,
+      "tag": "0011_payout_invariants",
+      "breakpoints": true
     }
   ]
 }

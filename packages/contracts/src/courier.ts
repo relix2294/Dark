@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Geo, Uuid } from './common.js';
-import { Brand, CourierStatus, DeliveryTaskStatus, OrderStatus, TempZone, Transport } from './enums.js';
+import { Brand, CourierStatus, DeliveryTaskStatus, OrderStatus, TempZone, Transport, PayoutKind, PayoutStatus } from './enums.js';
 import { Dirams } from './money.js';
 
 export const PositionBatch = z.object({
@@ -68,7 +68,30 @@ export const ShiftSummaryView = z.object({
   returned: z.number().int(),
   avg_delivery_min: z.number().int().nullable(),
   km: z.number(),
+  /** Начисление по тарифу точки: за доставку, километр, час. Выплата — на кошелёк DC после закрытия смены. */
+  pay: z.object({
+    per_delivery_dirams: Dirams,
+    per_km_dirams: Dirams,
+    per_hour_dirams: Dirams,
+    deliveries_dirams: Dirams,
+    km_dirams: Dirams,
+    hours_dirams: Dirams,
+    total_dirams: Dirams,
+  }),
+  /** Статус выплаты закрытой смены; null — смена ещё идёт. */
+  payout_status: PayoutStatus.nullable(),
 });
+
+export const CourierPayoutView = z.object({
+  id: Uuid,
+  kind: PayoutKind,
+  amount_dirams: Dirams,
+  status: PayoutStatus,
+  reason: z.string().nullable(),
+  created_at: z.iso.datetime(),
+  sent_at: z.iso.datetime().nullable(),
+});
+export const CourierPayoutListView = z.object({ payouts: z.array(CourierPayoutView) });
 
 /** Позвонить через подменный номер: at — время нажатия, если запрос ждал связи. */
 export const CallRequest = z.object({ at: z.iso.datetime().optional() });

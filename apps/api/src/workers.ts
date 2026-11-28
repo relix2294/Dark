@@ -7,7 +7,7 @@ import { courierPosition, idempotencyKey, store } from './shared/db/schema/index
 import { detectDelays, registerNotifySubscribers, sendPending, smsFallback } from './modules/notify/index.js';
 import { registerRealtimeSubscriber } from './modules/realtime/index.js';
 import { dispatchStore } from './modules/dispatch/index.js';
-import { CAPTURE_RETRY_DELAYS_SEC, executeCapture, nightlyReconcile, reconcilePending, releaseOrphanHolds, warnExpiringHolds } from './modules/payments/index.js';
+import { CAPTURE_RETRY_DELAYS_SEC, executeCapture, nightlyReconcile, reconcilePending, releaseOrphanHolds, sendPendingPayouts, warnExpiringHolds } from './modules/payments/index.js';
 import { markPaymentFailed } from './modules/orders/index.js';
 import { planDailyStocktake } from './modules/wms/index.js';
 import { purgeAttempts } from './modules/customers/index.js';
@@ -68,6 +68,9 @@ export async function startWorkers(deps: AppDeps, log: FastifyBaseLogger) {
     const orphans = await releaseOrphanHolds(deps);
     if (orphans.length) log.warn({ order_ids: orphans }, 'payments: сняты холды у завершённых заказов');
     await warnExpiringHolds(deps);
+    // выплаты курьерам на кошелёк DC (только безналично)
+    const paid = await sendPendingPayouts(deps);
+    if (paid) log.info({ payouts: paid }, 'выплаты курьерам отправлены');
   });
 
   await boss.work('payments.nightly', async () => {

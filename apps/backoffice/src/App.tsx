@@ -14,8 +14,9 @@ import { Warehouse } from './Warehouse.js';
 import { Plan } from './Plan.js';
 import { Reports } from './Reports.js';
 import { Import } from './Import.js';
+import { Payouts } from './Payouts.js';
 
-type Tab = 'console' | 'catalog' | 'import' | 'warehouse' | 'zones' | 'promo' | 'staff' | 'plan' | 'reports' | 'params' | 'audit';
+type Tab = 'console' | 'catalog' | 'import' | 'warehouse' | 'zones' | 'promo' | 'staff' | 'plan' | 'payouts' | 'reports' | 'params' | 'audit';
 
 /** Вкладки по ролям — по матрице прав ТЗ §9 (сервер всё равно проверяет каждый запрос). */
 const TABS: { id: Tab; title: string; roles: StaffRole[] }[] = [
@@ -27,6 +28,7 @@ const TABS: { id: Tab; title: string; roles: StaffRole[] }[] = [
   { id: 'promo', title: 'Промо', roles: ['manager', 'admin'] },
   { id: 'staff', title: 'Персонал', roles: ['manager', 'admin'] },
   { id: 'plan', title: 'Курьеры', roles: ['shift_lead', 'manager', 'admin'] },
+  { id: 'payouts', title: 'Выплаты', roles: ['manager', 'finance'] },
   { id: 'reports', title: 'Отчёты', roles: ['shift_lead', 'manager', 'finance'] },
   { id: 'params', title: 'Параметры', roles: ['shift_lead', 'manager', 'admin'] },
   { id: 'audit', title: 'Журнал', roles: ['shift_lead', 'manager', 'admin', 'finance'] },
@@ -93,6 +95,7 @@ export function App() {
           promo: <Promos />,
           staff: <Staff storeId={store} />,
           plan: <Plan storeId={store} />,
+          payouts: <Payouts storeId={store} />,
           reports: <Reports storeId={store} />,
           params: <Params storeId={store} />,
           audit: <Audit />,

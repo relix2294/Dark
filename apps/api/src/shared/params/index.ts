@@ -31,6 +31,13 @@ export const DEFAULT_PARAMS = {
   STOCKTAKE_TOLERANCE_PCT: 2,
   STATION_CAPACITY: { pizza: 4, grill: 6, cold: 8, pack: 10 } as Record<string, number>,
   LAST_ORDER_BEFORE_CLOSE_MS: { LAB: 20 * 60_000, SOR: 50 * 60_000 } as Record<string, number>,
+  /**
+   * Тариф курьера (решение заказчика: оплата за смену, только безналично, через DC). Стартовые оценки —
+   * уточняются по точке в админке, как и прочие параметры.
+   */
+  COURIER_PAY_PER_DELIVERY_DIRAMS: 500,
+  COURIER_PAY_PER_KM_DIRAMS: 100,
+  COURIER_PAY_PER_HOUR_DIRAMS: 0,
   /** Таймаут ответа банка на hold (ТЗ §5). */
   PAYMENT_HOLD_TIMEOUT_MS: 10_000,
 } as const;

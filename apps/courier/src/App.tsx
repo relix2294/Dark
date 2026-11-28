@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { z } from 'zod';
-import type { CourierSelfView, DeliveryTaskView, ShiftSummaryView } from '@dark/contracts';
-import { BRAND_RU, Badge, Button, COURIER_STATUS_RU, Card, ErrorBanner, Field, ORDER_STATUS_RU, Screen, Spinner, minutesLeft, plural, postOrQueue, time, useBarcodeScanner, useLive, useOfflineQueue, useStaff } from '@dark/ui';
+import type { CourierPayoutListView, CourierSelfView, DeliveryTaskView, PayoutStatus, ShiftSummaryView } from '@dark/contracts';
+import { BRAND_RU, Badge, Button, COURIER_STATUS_RU, Card, ErrorBanner, Field, ORDER_STATUS_RU, Screen, Spinner, dateTime, minutesLeft, plural, postOrQueue, somoni, time, useBarcodeScanner, useLive, useOfflineQueue, useStaff } from '@dark/ui';
 
 type Me = z.infer<typeof CourierSelfView>;
 type Task = z.infer<typeof DeliveryTaskView>;
@@ -104,6 +104,7 @@ export function App() {
             Начать смену
           </Button>
           <ShiftSummary />
+          <PayoutHistory />
         </>
       ) : (
         <>
@@ -259,7 +260,14 @@ function TaskCard({ task: serverTask, geo, queue, onChange }: { task: Task; geo:
 
 const hm = (min: number) => `${Math.floor(min / 60)} ч ${String(min % 60).padStart(2, '0')} мин`;
 
-/** Итоги смены (ТЗ §9 «заработок за смену»): сумма в деньгах появится, когда утвердят модель оплаты курьеров. */
+const PAYOUT_RU: Record<PayoutStatus, string> = {
+  pending: 'уйдёт на ваш кошелёк DC в ближайшие минуты',
+  sent: 'выплачено на кошелёк DC',
+  failed: 'выплата не прошла — финансист разбирается',
+  no_wallet: 'не указан кошелёк DC — скажите управляющему',
+};
+
+/** Итоги смены (ТЗ §9 «заработок за смену»): начисление по тарифу точки; выплата — только безналично, на DC. */
 function ShiftSummary() {
   const { api } = useStaff();
   const q = useQuery({ queryKey: ['shift-summary'], queryFn: () => api.get<z.infer<typeof ShiftSummaryView> | null>('/courier/shift/summary'), refetchInterval: 60_000 });
@@ -287,11 +295,43 @@ function ShiftSummary() {
           <div className="muted">на смене</div>
         </div>
       </div>
+      <div className="row">
+        <span>{s.shift_ended_at ? 'Начислено за смену' : 'Заработано на сейчас'}</span>
+        <b className="big">{somoni(s.pay.total_dirams)}</b>
+      </div>
+      <div className="muted">
+        доставки {somoni(s.pay.deliveries_dirams)} · км {somoni(s.pay.km_dirams)}
+        {s.pay.hours_dirams > 0 && ` · часы ${somoni(s.pay.hours_dirams)}`}
+      </div>
+      {s.payout_status && <Badge tone={s.payout_status === 'sent' ? 'green' : s.payout_status === 'pending' ? 'grey' : 'red'}>{PAYOUT_RU[s.payout_status]}</Badge>}
       <div className="muted">
         поездок {s.trips} · вовремя {s.on_time} из {s.delivered}
         {s.returned > 0 && ` · возвратов ${s.returned}`}
         {s.avg_delivery_min != null && ` · в среднем ${s.avg_delivery_min} мин от точки до клиента`}
       </div>
+    </Card>
+  );
+}
+
+/** Последние выплаты: за смены и доплаты — всё на кошелёк DC, наличных нет. */
+function PayoutHistory() {
+  const { api } = useStaff();
+  const q = useQuery({ queryKey: ['payouts'], queryFn: () => api.get<z.infer<typeof CourierPayoutListView>>('/courier/payouts') });
+  const list = q.data?.payouts ?? [];
+  if (!list.length) return null;
+  return (
+    <Card>
+      <b>Выплаты на DC</b>
+      {list.slice(0, 10).map((p) => (
+        <div key={p.id} className="row">
+          <span className="muted">
+            {dateTime(p.created_at)} · {p.kind === 'bonus' ? `доплата${p.reason ? `: ${p.reason}` : ''}` : 'смена'}
+          </span>
+          <span>
+            {somoni(p.amount_dirams)} {p.status === 'sent' ? '✓' : p.status === 'pending' ? '…' : '!'}
+          </span>
+        </div>
+      ))}
     </Card>
   );
 }

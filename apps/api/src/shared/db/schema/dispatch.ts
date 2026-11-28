@@ -1,7 +1,7 @@
-import { doublePrecision, index, integer, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { check, doublePrecision, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { base, ts } from './_common.js';
-import { callRoleEnum, courierStatusEnum, deliveryTaskStatusEnum, transportEnum } from './enums.js';
+import { callRoleEnum, courierStatusEnum, deliveryTaskStatusEnum, payoutKindEnum, payoutStatusEnum, transportEnum } from './enums.js';
 import { order } from './orders.js';
 import { store, userStaff } from './refs.js';
 
@@ -99,4 +99,30 @@ export const callAttempt = pgTable(
     at: ts('at').notNull(),
   },
   (t) => [index('call_attempt_order_idx').on(t.orderId, t.fromRole)],
+);
+
+/**
+ * Выплата курьеру на кошелёк DC: за смену (одна на смену) или доплата управляющего. Только безналично.
+ * Отправку делает воркер с ключом идемпотентности = id выплаты: повтор не платит дважды.
+ */
+export const courierPayout = pgTable(
+  'courier_payout',
+  {
+    ...base,
+    courierId: uuid('courier_id').notNull().references(() => courier.id),
+    storeId: uuid('store_id').notNull().references(() => store.id),
+    shiftId: uuid('shift_id').unique().references(() => courierShift.id),
+    kind: payoutKindEnum('kind').notNull(),
+    amountDirams: integer('amount_dirams').notNull(),
+    breakdown: jsonb('breakdown').$type<Record<string, number>>(),
+    reason: text('reason'),
+    status: payoutStatusEnum('status').notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: ts('next_attempt_at'),
+    lastError: text('last_error'),
+    providerRef: text('provider_ref'),
+    sentAt: ts('sent_at'),
+    createdBy: text('created_by'),
+  },
+  (t) => [check('courier_payout_amount_chk', sql`${t.amountDirams} > 0`), index('courier_payout_store_idx').on(t.storeId, t.createdAt)],
 );

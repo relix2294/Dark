@@ -14,13 +14,14 @@ import {
   NoShowRequest,
   PickupRequest,
   PositionBatch,
-  ShiftStartRequest, ShiftSummaryView } from '@dark/contracts';
+  ShiftStartRequest, ShiftSummaryView, CourierPayoutListView } from '@dark/contracts';
 import { shiftSummary } from './shift-summary.js';
 import type { AppDeps } from '../../app.js';
 import { requireStaff } from '../../shared/auth/index.js';
 import * as svc from './service.js';
 import { eq } from 'drizzle-orm';
-import { deliveryTask } from '../../shared/db/schema/index.js';
+import { courier, deliveryTask } from '../../shared/db/schema/index.js';
+import { courierPayouts } from '../payments/index.js';
 import { openCallSessions } from '../calls/index.js';
 
 export { planDispatch, type DispatchInput, type DispatchResult } from './planner.js';
@@ -49,6 +50,11 @@ export async function registerDispatch(app: FastifyInstance, deps: AppDeps) {
   );
   r.post('/courier/shift/end', { schema: { tags, security: sec, response: { 200: CourierSelfView } } }, async (req) => svc.shiftEnd(deps, me(req.principal)));
   r.get('/courier/shift/summary', { schema: { tags, security: sec, response: { 200: ShiftSummaryView.nullable() } } }, async (req) => shiftSummary(deps, me(req.principal)));
+  r.get('/courier/payouts', { schema: { tags, security: sec, response: { 200: CourierPayoutListView } } }, async (req) => {
+    const p = me(req.principal);
+    const [c] = await deps.db.select({ id: courier.id }).from(courier).where(eq(courier.staffId, p.staff_id));
+    return c ? courierPayouts(deps, c.id) : { payouts: [] };
+  });
   r.post('/courier/shift/break', { schema: { tags, security: sec, response: { 200: CourierSelfView } } }, async (req) => svc.shiftBreak(deps, me(req.principal)));
 
   /** Телеметрия — без Idempotency-Key: пакеты точек дедуплицируются по времени события на клиенте и безвредны при повторе. */

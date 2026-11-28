@@ -21,7 +21,7 @@ export async function setupApp() {
     current = d;
   };
   await migrate(deps.db, { migrationsFolder: new URL('../drizzle', import.meta.url).pathname });
-  await deps.db.execute(sql`truncate table ${s.notification}, ${s.authAttempt}, ${s.orderRating}, ${s.devicePresence}, ${s.callAttempt}, ${s.callSession}, ${s.outbox}, ${s.idempotencyKey}, ${s.auditLog}, ${s.parameter}, ${s.stockMove}, ${s.stockLot}, ${s.cell},
+  await deps.db.execute(sql`truncate table ${s.notification}, ${s.authAttempt}, ${s.orderRating}, ${s.devicePresence}, ${s.callAttempt}, ${s.callSession}, ${s.courierPayout}, ${s.outbox}, ${s.idempotencyKey}, ${s.auditLog}, ${s.parameter}, ${s.stockMove}, ${s.stockLot}, ${s.cell},
     ${s.promoUse}, ${s.promo}, ${s.paymentOp}, ${s.payment}, ${s.orderStatusLog}, ${s.orderItem}, ${s.order}, ${s.address}, ${s.customer},
     ${s.courier}, ${s.userStaff}, ${s.dish}, ${s.price}, ${s.product}, ${s.category}, ${s.deliveryZone}, ${s.store} cascade`);
   const app = await buildApp(deps);

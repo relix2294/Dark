@@ -4,6 +4,7 @@ import { asc, eq } from 'drizzle-orm';
 import type { StaffRole } from '@dark/contracts';
 import { IdParams, StaffInput, StaffListView, StaffPatch, StaffQuery, StaffView } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
+import type { Tx } from '../../shared/db/client.js';
 import { authAttempt, userStaff } from '../../shared/db/schema/index.js';
 import { audit } from '../../shared/audit.js';
 import { hashPin, requireStaff } from '../../shared/auth/index.js';
@@ -20,13 +21,19 @@ const sec = [{ bearer: [] }];
 const MANAGER_CAN_GRANT: StaffRole[] = ['picker', 'cook', 'courier', 'shift_lead'];
 const STORE_ROLES: StaffRole[] = ['picker', 'cook', 'courier', 'shift_lead', 'manager'];
 
-const view = (u: typeof userStaff.$inferSelect) => ({ id: u.id, phone: u.phone, name: u.name, role: u.role, store_id: u.storeId, is_active: u.isActive });
+const view = (u: typeof userStaff.$inferSelect) => ({ id: u.id, phone: u.phone, name: u.name, role: u.role, store_id: u.storeId, is_active: u.isActive, dc_user_id: u.dcUserId });
 
 function assertCanManage(me: { role: StaffRole; store_id: string | null }, role: StaffRole, storeId: string | null) {
   if (STORE_ROLES.includes(role) && !storeId) throw new AppError('VALIDATION', `Роль ${role} требует точку`);
   if (me.role === 'admin') return;
   if (!MANAGER_CAN_GRANT.includes(role)) throw new AppError('FORBIDDEN', `Управляющий не назначает роль ${role}`);
   if (storeId !== me.store_id) throw new AppError('FORBIDDEN', 'Только своя точка');
+}
+
+/** Один кошелёк DC — один сотрудник: иначе выплата уйдёт не тому. */
+async function assertWalletFree(tx: Tx, dcUserId: string, selfId: string | null) {
+  const [other] = await tx.select({ id: userStaff.id }).from(userStaff).where(eq(userStaff.dcUserId, dcUserId));
+  if (other && other.id !== selfId) throw new AppError('VALIDATION', 'Этот кошелёк DC уже привязан к другому сотруднику');
 }
 
 export async function registerStaffAdmin(app: FastifyInstance, deps: AppDeps) {
@@ -46,7 +53,8 @@ export async function registerStaffAdmin(app: FastifyInstance, deps: AppDeps) {
     const u = await deps.db.transaction(async (tx) => {
       const [dup] = await tx.select({ id: userStaff.id }).from(userStaff).where(eq(userStaff.phone, b.phone));
       if (dup) throw new AppError('VALIDATION', 'Сотрудник с таким телефоном уже есть');
-      const [u] = await tx.insert(userStaff).values({ phone: b.phone, name: b.name, role: b.role, storeId: b.store_id, pinHash: hashPin(b.pin) }).returning();
+      if (b.dc_user_id) await assertWalletFree(tx, b.dc_user_id, null);
+      const [u] = await tx.insert(userStaff).values({ phone: b.phone, name: b.name, role: b.role, storeId: b.store_id, pinHash: hashPin(b.pin), dcUserId: b.dc_user_id ?? null }).returning();
       if (b.role === 'courier') await ensureCourier(tx, u!.id, b.transport ?? 'bike', b.store_id);
       await audit(tx, { actorType: 'staff', actorId: me.staff_id, action: 'staff.create', objectType: 'user_staff', objectId: u!.id, after: view(u!), storeId: b.store_id });
       return u!;
@@ -62,6 +70,7 @@ export async function registerStaffAdmin(app: FastifyInstance, deps: AppDeps) {
       if (!before) throw notFound('Сотрудник', req.params.id);
       if (before.id === me.staff_id && (b.role !== undefined || b.is_active === false)) throw new AppError('FORBIDDEN', 'Нельзя менять свою роль или блокировать себя');
       assertCanManage(me, before.role, before.storeId);
+      if (b.dc_user_id) await assertWalletFree(tx, b.dc_user_id, before.id);
       const role = b.role ?? before.role;
       const storeId = b.store_id !== undefined ? b.store_id : before.storeId;
       assertCanManage(me, role, storeId);
@@ -73,6 +82,7 @@ export async function registerStaffAdmin(app: FastifyInstance, deps: AppDeps) {
           ...(b.store_id !== undefined && { storeId: b.store_id }),
           ...(b.is_active !== undefined && { isActive: b.is_active }),
           ...(pin !== undefined && { pinHash: hashPin(pin) }),
+          ...(b.dc_user_id !== undefined && { dcUserId: b.dc_user_id }),
         })
         .where(eq(userStaff.id, before.id))
         .returning();

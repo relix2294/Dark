@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Geo, Uuid } from './common.js';
-import { Brand, PromoAudience, PromoType, StaffRole, Station, TempZone, Transport } from './enums.js';
+import { Brand, PromoAudience, PromoType, StaffRole, Station, TempZone, Transport, PayoutKind, PayoutStatus } from './enums.js';
 import { Dirams } from './money.js';
 import { DishModifiers } from './modifiers.js';
 
@@ -118,6 +118,8 @@ export const StaffInput = z.object({
   store_id: Uuid.nullable(),
   pin: z.string().regex(/^\d{4,6}$/),
   transport: Transport.optional(),
+  /** Кошелёк DC сотрудника: туда уходят выплаты курьеру. */
+  dc_user_id: z.string().min(1).max(64).optional(),
 });
 export const StaffPatch = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -125,9 +127,10 @@ export const StaffPatch = z.object({
   store_id: Uuid.nullable().optional(),
   pin: z.string().regex(/^\d{4,6}$/).optional(),
   is_active: z.boolean().optional(),
+  dc_user_id: z.string().min(1).max(64).nullable().optional(),
   reason: z.string().min(1).max(200),
 });
-export const StaffView = z.object({ id: Uuid, phone: z.string(), name: z.string(), role: StaffRole, store_id: Uuid.nullable(), is_active: z.boolean() });
+export const StaffView = z.object({ id: Uuid, phone: z.string(), name: z.string(), role: StaffRole, store_id: Uuid.nullable(), is_active: z.boolean(), dc_user_id: z.string().nullable() });
 export const StaffListView = z.object({ staff: z.array(StaffView) });
 export const StaffQuery = z.object({ store_id: Uuid.optional() });
 
@@ -264,3 +267,27 @@ export const StocktakeLineAdmin = z.object({
 export const StocktakeAdminView = z.object({ id: Uuid, scope: z.string(), status: z.string(), created_at: z.iso.datetime(), lines: z.array(StocktakeLineAdmin) });
 export const StocktakeListView = z.object({ stocktakes: z.array(StocktakeAdminView) });
 export const StocktakeApplyResult = z.object({ adjusted: z.number().int(), unchanged: z.number().int(), not_counted: z.number().int() });
+
+// ---------- выплаты курьерам ----------
+export const PayoutQuery = z.object({ from: z.iso.date(), to: z.iso.date() });
+export const PayoutRow = z.object({
+  id: Uuid,
+  courier_id: Uuid,
+  courier_name: z.string(),
+  kind: PayoutKind,
+  amount_dirams: Dirams,
+  status: PayoutStatus,
+  reason: z.string().nullable(),
+  breakdown: z.record(z.string(), z.number()).nullable(),
+  attempts: z.number().int(),
+  last_error: z.string().nullable(),
+  created_at: z.iso.datetime(),
+  sent_at: z.iso.datetime().nullable(),
+});
+export const PayoutListView = z.object({
+  payouts: z.array(PayoutRow),
+  totals: z.object({ sent_dirams: Dirams, pending_dirams: Dirams, problem_dirams: Dirams }),
+});
+/** Доплата курьеру (бонус): отдельная выплата на DC, с причиной и в журнал. Удержаний нет — с кошелька не списываем. */
+export const BonusRequest = z.object({ amount_dirams: Dirams.min(100).max(1_000_000), reason: z.string().min(1).max(200) });
+export const CourierIdParams = z.object({ courier_id: Uuid });

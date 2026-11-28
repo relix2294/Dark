@@ -67,6 +67,8 @@ export const PERMISSIONS = {
   'dispatch.plan': ['shift_lead', 'manager', 'admin'],
   'promo.write': ['manager', 'admin'],
   'finance.reports': ['manager', 'finance'],
+  /** Выплаты курьерам: доплата, повтор неудачной выплаты. */
+  'payouts.manage': ['manager', 'finance'],
   'audit.read': ['shift_lead', 'manager', 'admin', 'finance'],
   'finance.reconcile': ['finance'],
   'staff.write': ['manager', 'admin'],
