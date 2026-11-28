@@ -17,6 +17,7 @@ export const ErrorCode = z.enum([
   'FORBIDDEN',
   // технические
   'RATE_LIMITED',
+  'CALL_UNAVAILABLE',
   'UNAUTHORIZED',
   'NOT_FOUND',
   'VALIDATION',

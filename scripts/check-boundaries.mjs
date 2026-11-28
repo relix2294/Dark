@@ -24,6 +24,7 @@ export const OWNERSHIP = {
   dispatch: ['courier', 'courierShift', 'courierPosition', 'deliveryTask', 'courierPlan'],
   backoffice: ['parameter', 'devicePresence'],
   notify: ['notification'],
+  calls: ['callSession', 'callAttempt'],
   shared: ['outbox', 'idempotencyKey', 'auditLog'],
 };
 

@@ -41,7 +41,12 @@ export function createApi(opts: { base?: string; tokenKey: string; onUnauthorize
     }
     if (res.status === 204) return undefined as T;
     const text = await res.text();
-    const data = text ? (JSON.parse(text) as unknown) : null;
+    let data: unknown = null;
+    try {
+      data = text ? (JSON.parse(text) as unknown) : null;
+    } catch {
+      data = null; // шлюз (Caddy) при недоступном API отвечает не JSON
+    }
     if (!res.ok) {
       const err = (data as { error?: { code: ErrorCode; message: string; details?: Record<string, unknown> } } | null)?.error;
       if (res.status === 401) opts.onUnauthorized?.();

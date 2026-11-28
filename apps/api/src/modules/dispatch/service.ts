@@ -2,7 +2,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, notInArray, sql } from 'drizzl
 import type { DeliveryTaskView, StaffPrincipal } from '@dark/contracts';
 import type { AppDeps } from '../../app.js';
 import type { Tx } from '../../shared/db/client.js';
-import { courier, courierPosition, courierShift, deliveryTask, kdsItem, order, orderItem, outbox, pickTask, product, store, userStaff } from '../../shared/db/schema/index.js';
+import { callSession, courier, courierPosition, courierShift, customer, deliveryTask, kdsItem, order, orderItem, outbox, pickTask, product, store, userStaff } from '../../shared/db/schema/index.js';
 import { AppError, notFound } from '../../shared/errors/index.js';
 import { publish } from '../../shared/events/outbox.js';
 import { distanceM, travelMinutes, type Geo } from '../../shared/geo.js';
@@ -12,6 +12,7 @@ import { setCaptured, transition } from '../orders/index.js';
 import { markCustomerDelivered } from '../customers/index.js';
 import { captureAmountNow } from '../payments/index.js';
 import { returnPickedItems } from '../wms/index.js';
+import { courierCallStats } from '../calls/index.js';
 import { planDispatch, type FreeCourier, type PendingOrder } from './planner.js';
 import { courierMachine, taskMachine } from './state-machine.js';
 
@@ -127,6 +128,14 @@ async function taskView(tx: Tx, t: typeof deliveryTask.$inferSelect): Promise<De
         .innerJoin(product, eq(product.id, orderItem.productId))
         .where(inArray(orderItem.orderId, t.orderIds))
     : [];
+  const sessions = t.orderIds.length
+    ? await tx.select().from(callSession).where(and(inArray(callSession.orderId, t.orderIds), eq(callSession.courierId, t.courierId), isNull(callSession.closedAt)))
+    : [];
+  const masked = orders.length
+    ? await tx.select({ id: customer.id, m: customer.phoneMasked }).from(customer).where(inArray(customer.id, orders.map((o) => o.customerId)))
+    : [];
+  const calls = new Map<string, Awaited<ReturnType<typeof courierCallStats>>>();
+  for (const o of orders) calls.set(o.id, await courierCallStats(tx, o.id));
   return {
     task_id: t.id,
     status: t.status,
@@ -151,7 +160,10 @@ async function taskView(tx: Tx, t: typeof deliveryTask.$inferSelect): Promise<De
           comment: (a['comment'] as string | null) ?? null,
           geo: { lat: Number(a['lat']), lon: Number(a['lon']) },
         },
-        customer_phone_masked: null,
+        customer_phone_masked: masked.find((m) => m.id === o.customerId)?.m ?? null,
+        call_number: sessions.find((x) => x.orderId === o.id)?.numberForCourier ?? null,
+        calls_made: calls.get(o.id)?.count ?? 0,
+        first_call_at: calls.get(o.id)?.firstAt?.toISOString() ?? null,
         promised_at: o.promisedAt?.toISOString() ?? null,
         total_dirams: o.totalDirams,
       };
@@ -273,7 +285,14 @@ export async function noShow(deps: AppDeps, me: StaffPrincipal, orderId: string,
     const [t] = await tx.select().from(deliveryTask).where(and(eq(deliveryTask.courierId, c.id), eq(deliveryTask.status, 'delivering'), sql`${orderId} = any(${deliveryTask.orderIds})`)).for('update');
     if (!t) throw notFound('Задание с этим заказом', orderId);
     const at = eventTime(deps.clock.now(), rawAt, t.pickedUpAt);
-    await transition(tx, orderId, 'on_the_way', 'returning', 'staff', me.staff_id, { comment: comment ?? null, ...eventMeta(deps, rawAt) }, at);
+    // ТЗ §11: 2 звонка через подменный номер и ожидание NO_SHOW_WAIT от первого — проверяет сервер, не кнопка
+    const P = await loadParams(tx, t.storeId);
+    const calls = await courierCallStats(tx, orderId);
+    if (calls.count < 2) throw new AppError('INVALID_TRANSITION', 'Сначала позвоните клиенту 2 раза из приложения', { calls_made: calls.count });
+    const waitedMs = at.getTime() - calls.firstAt!.getTime();
+    if (waitedMs < P.NO_SHOW_WAIT_MS)
+      throw new AppError('INVALID_TRANSITION', `Подождите у двери ещё ${Math.ceil((P.NO_SHOW_WAIT_MS - waitedMs) / 60_000)} мин`, { wait_left_sec: Math.ceil((P.NO_SHOW_WAIT_MS - waitedMs) / 1000) });
+    await transition(tx, orderId, 'on_the_way', 'returning', 'staff', me.staff_id, { comment: comment ?? null, calls_made: calls.count, ...eventMeta(deps, rawAt) }, at);
     const rest = await tx.select().from(order).where(and(inArray(order.id, t.orderIds), eq(order.status, 'on_the_way')));
     if (rest.length === 0) {
       await setTaskStatus(tx, t, 'failed', 'courier', { finishedAt: at });

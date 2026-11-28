@@ -144,3 +144,8 @@ export const DISPATCH_REASON_RU: Record<DispatchReason, string> = {
   customer_request: 'просьба клиента',
   other: 'другое',
 };
+
+/** Кто звонит через подменный номер (ТЗ §9: звонок через скрытый номер). */
+export const CALL_ROLE_VALUES = ['courier', 'customer'] as const;
+export const CallRole = z.enum(CALL_ROLE_VALUES);
+export type CallRole = z.infer<typeof CallRole>;

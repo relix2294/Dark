@@ -19,11 +19,23 @@ import { shiftSummary } from './shift-summary.js';
 import type { AppDeps } from '../../app.js';
 import { requireStaff } from '../../shared/auth/index.js';
 import * as svc from './service.js';
+import { eq } from 'drizzle-orm';
+import { deliveryTask } from '../../shared/db/schema/index.js';
+import { openCallSessions } from '../calls/index.js';
 
 export { planDispatch, type DispatchInput, type DispatchResult } from './planner.js';
 export { taskMachine, courierMachine } from './state-machine.js';
 export { dispatchStore, detachOrder, confirmDeliveredByLead, manualAssign, markReturned, consoleCouriers, courierForOrder, unassign } from './service.js';
 export { ensureCourier, registerCourierPlan } from './plan.js';
+
+/** Забрал пакеты → сразу связки подменных номеров: позвонить клиенту можно будет и без связи с сервером. */
+async function pickupWithCalls(deps: AppDeps, me: Parameters<typeof svc.pickup>[1], taskId: string, barcodes: string[], at?: string) {
+  const view = await svc.pickup(deps, me, taskId, barcodes, at);
+  const [t] = await deps.db.select({ courierId: deliveryTask.courierId }).from(deliveryTask).where(eq(deliveryTask.id, taskId));
+  if (!t) return view;
+  await openCallSessions(deps, view.orders.map((o) => o.order_id), t.courierId);
+  return (await svc.currentTask(deps, me)) ?? view;
+}
 
 export async function registerDispatch(app: FastifyInstance, deps: AppDeps) {
   const r = app.withTypeProvider<ZodTypeProvider>();
@@ -49,7 +61,7 @@ export async function registerDispatch(app: FastifyInstance, deps: AppDeps) {
     svc.accept(deps, me(req.principal), req.params.id),
   );
   r.post('/courier/tasks/:id/pickup', { schema: { tags, security: sec, params: CourierTaskIdParams, body: PickupRequest, response: { 200: DeliveryTaskView } } }, async (req) =>
-    svc.pickup(deps, me(req.principal), req.params.id, req.body.package_barcodes, req.body.at),
+    pickupWithCalls(deps, me(req.principal), req.params.id, req.body.package_barcodes, req.body.at),
   );
   r.post('/courier/orders/:id/delivered', { schema: { tags, security: sec, params: CourierOrderIdParams, body: DeliveredRequest } }, async (req) =>
     svc.delivered(deps, requireStaff(req.principal, 'courier.app'), req.params.id, req.body.geo, req.body.photo_url, req.body.at),

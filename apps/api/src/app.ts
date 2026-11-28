@@ -23,6 +23,7 @@ import { idempotencyPlugin } from './shared/idempotency/plugin.js';
 import { systemClock, type Clock } from './shared/time.js';
 import { StubWalletAdapter } from './modules/payments/stub-adapter.js';
 import type { WalletAdapter } from './modules/payments/adapter.js';
+import { registerCalls, StubCallProxy, type CallProxy } from './modules/calls/index.js';
 import { registerCatalog } from './modules/catalog/index.js';
 import { registerOrders } from './modules/orders/index.js';
 import { registerCustomers } from './modules/customers/index.js';
@@ -45,6 +46,8 @@ export type AppDeps = {
   clock: Clock;
   tokens: TokenService;
   wallet: WalletAdapter;
+  /** Подменные номера для звонков курьер ↔ клиент (ТЗ §9). */
+  calls: CallProxy;
   storage: Storage;
   channel: CustomerChannel;
 };
@@ -58,6 +61,7 @@ export function createDeps(config: Config, over: Partial<AppDeps> = {}): AppDeps
     clock,
     tokens: over.tokens ?? new TokenService(config.JWT_SECRET),
     wallet: over.wallet ?? new StubWalletAdapter(clock),
+    calls: over.calls ?? new StubCallProxy(),
     storage: over.storage ?? createStorage(config),
     channel: over.channel ?? new StubChannel(config.NODE_ENV === 'test' ? { info: () => undefined } : console),
     close,
@@ -161,6 +165,7 @@ export async function buildApp(deps: AppDeps) {
       await registerReports(api, deps);
       await registerRealtime(api, deps);
       await registerNotify(api, deps);
+      await registerCalls(api, deps);
     },
     { prefix: '/api/v1' },
   );

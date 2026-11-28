@@ -36,12 +36,18 @@ export async function findCustomerById(deps: AppDeps, id: string) {
  * Проверка токена DC Next. Контракт банка не получен: пока принимаем токен вида `dc:<dc_user_id>`
  * (только не в production). Реальная проверка — за адаптером, как и платежи.
  */
-async function verifyDcToken(deps: AppDeps, token: string): Promise<{ dcUserId: string; phoneMasked?: string; name?: string }> {
+async function verifyDcToken(deps: AppDeps, token: string): Promise<{ dcUserId: string; phone?: string; name?: string }> {
   if (deps.config.NODE_ENV !== 'production' && token.startsWith('dc:')) {
-    return { dcUserId: token.slice(3) };
+    const dcUserId = token.slice(3);
+    // в разработке номер выводится из id, чтобы звонки через подменный номер можно было проверить
+    const digits = [...dcUserId].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 10_000_000, 7);
+    return { dcUserId, phone: `+99290${String(digits).padStart(7, '0')}` };
   }
   throw new AppError('UNAUTHORIZED', 'Токен DC Next не принят');
 }
+
+/** «+992 ** *** 12 34» — узнать номер можно, позвонить нельзя. */
+export const maskPhone = (p: string) => (p.length >= 4 ? `${p.slice(0, 4)} ** *** ${p.slice(-4, -2)} ${p.slice(-2)}` : '***');
 
 export async function registerCustomers(app: FastifyInstance, deps: AppDeps) {
   const r = app.withTypeProvider<ZodTypeProvider>();
@@ -56,8 +62,12 @@ export async function registerCustomers(app: FastifyInstance, deps: AppDeps) {
       const dc = await verifyDcToken(deps, req.body.dc_token);
       const [c] = await deps.db
         .insert(customer)
-        .values({ dcUserId: dc.dcUserId, phoneMasked: dc.phoneMasked ?? null, name: dc.name ?? null })
-        .onConflictDoUpdate({ target: customer.dcUserId, set: { updatedAt: deps.clock.now() } })
+        .values({ dcUserId: dc.dcUserId, phone: dc.phone ?? null, phoneMasked: dc.phone ? maskPhone(dc.phone) : null, name: dc.name ?? null })
+        .onConflictDoUpdate({
+          target: customer.dcUserId,
+          // номер в DC мог смениться — берём свежий: по нему провайдер соединяет звонок
+          set: { updatedAt: deps.clock.now(), ...(dc.phone ? { phone: dc.phone, phoneMasked: maskPhone(dc.phone) } : {}) },
+        })
         .returning();
       const { token, expiresAt } = await deps.tokens.sign({ kind: 'customer', customer_id: c!.id, dc_user_id: c!.dcUserId });
       return { token, expires_at: expiresAt.toISOString() };

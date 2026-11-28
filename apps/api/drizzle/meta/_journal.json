@@ -57,6 +57,20 @@
       "when": 1795803263298,
       "tag": "0007_device_presence",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795845119846,
+      "tag": "0008_calls",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795845244990,
+      "tag": "0009_updated_at_triggers",
+      "breakpoints": true
     }
   ]
 }

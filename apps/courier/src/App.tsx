@@ -158,6 +158,17 @@ function TaskCard({ task: serverTask, geo, queue, onChange }: { task: Task; geo:
     mutationFn: (o: Task['orders'][number]) => act(`/courier/orders/${o.order_id}/delivered`, { geo: { lat: geo?.coords.latitude ?? 0, lon: geo?.coords.longitude ?? 0 } }, `доставлен ${o.number}`),
     onError: setError,
   });
+  // звонок через подменный номер (ТЗ §9): номер выдаёт сервер; без связи — номер, полученный при заборе пакета
+  const callCustomer = useMutation({
+    mutationFn: async (o: Task['orders'][number]) => {
+      const r = await postOrQueue<{ dial: string }>(api, queue, `/courier/orders/${o.order_id}/call`, { at: new Date().toISOString() }, `звонок ${o.number}`);
+      const number = r.queued ? o.call_number : r.data.dial;
+      if (!number) throw new Error('Нет связи, подменный номер ещё не выдан — позвоните старшему смены');
+      if (!r.queued) onChange();
+      window.location.href = `tel:${number}`;
+    },
+    onError: setError,
+  });
   const noShow = useMutation({ mutationFn: (o: Task['orders'][number]) => act(`/courier/orders/${o.order_id}/no-show`, { calls: 2 }, `не вышел ${o.number}`), onError: setError });
 
   useBarcodeScanner(
@@ -204,9 +215,17 @@ function TaskCard({ task: serverTask, geo, queue, onChange }: { task: Task; geo:
           {doneLocally(o.order_id) && <Badge tone="yellow">{doneLocally(o.order_id)}</Badge>}
           {o.status === 'on_the_way' && !doneLocally(o.order_id) && (
             <>
-              <a className="btn" href={navTo(o)} target="_blank" rel="noreferrer">
-                Маршрут ↗
-              </a>
+              <div className="row">
+                <a className="btn" href={navTo(o)} target="_blank" rel="noreferrer">
+                  Маршрут ↗
+                </a>
+                <Button disabled={callCustomer.isPending} onClick={() => callCustomer.mutate(o)}>
+                  📞 Позвонить клиенту
+                </Button>
+              </div>
+              <div className="muted">
+                Номер клиента скрыт{o.customer_phone_masked ? ` (${o.customer_phone_masked})` : ''} · звонков: {o.calls_made + queue.items.filter((a) => a.path === `/courier/orders/${o.order_id}/call`).length} из 2
+              </div>
               <Button big primary disabled={delivered.isPending || !geo} onClick={() => delivered.mutate(o)}>
                 Доставлено
               </Button>

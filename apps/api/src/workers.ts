@@ -12,6 +12,7 @@ import { markPaymentFailed } from './modules/orders/index.js';
 import { planDailyStocktake } from './modules/wms/index.js';
 import { purgeAttempts } from './modules/customers/index.js';
 import { detectOfflineDevices } from './modules/backoffice/index.js';
+import { closeFinishedSessions } from './modules/calls/index.js';
 
 /**
  * Фоновые задачи на pg-boss (очередь в самом Postgres — без Redis).
@@ -55,6 +56,8 @@ export async function startWorkers(deps: AppDeps, log: FastifyBaseLogger) {
     // устройства точки не на связи (ТЗ §10) — тот же минутный тик
     const silent = await detectOfflineDevices(deps);
     if (silent) log.warn({ devices: silent }, 'устройства не на связи');
+    // подменные номера закрытых заказов перестают соединять (ТЗ §9)
+    await closeFinishedSessions(deps);
   });
 
   await boss.work('payments.reconcile', async () => {

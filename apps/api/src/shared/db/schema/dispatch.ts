@@ -1,6 +1,8 @@
-import { doublePrecision, index, integer, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { doublePrecision, index, integer, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { base, ts } from './_common.js';
-import { courierStatusEnum, deliveryTaskStatusEnum, transportEnum } from './enums.js';
+import { callRoleEnum, courierStatusEnum, deliveryTaskStatusEnum, transportEnum } from './enums.js';
+import { order } from './orders.js';
 import { store, userStaff } from './refs.js';
 
 export const courier = pgTable('courier', {
@@ -65,3 +67,36 @@ export const courierPlan = pgTable('courier_plan', {
   couriersPlanned: integer('couriers_planned').notNull().default(0),
   editedBy: text('edited_by'),
 });
+
+/**
+ * Связка подменных номеров на время доставки (ТЗ §9: звонок через скрытый номер, как в такси):
+ * курьер и клиент набирают подменный номер, провайдер соединяет, настоящие номера не видны никому.
+ * Одна активная связка на заказ; при смене курьера старая закрывается.
+ */
+export const callSession = pgTable(
+  'call_session',
+  {
+    ...base,
+    orderId: uuid('order_id').notNull().references(() => order.id),
+    courierId: uuid('courier_id').notNull().references(() => courier.id),
+    provider: text('provider').notNull(),
+    providerRef: text('provider_ref').notNull(),
+    numberForCourier: text('number_for_courier').notNull(),
+    numberForCustomer: text('number_for_customer').notNull(),
+    expiresAt: ts('expires_at').notNull(),
+    closedAt: ts('closed_at'),
+  },
+  (t) => [uniqueIndex('call_session_active_order_uq').on(t.orderId).where(sql`closed_at is null`)],
+);
+
+/** Нажатие «Позвонить»: кто и когда (время события — для «клиент не вышел» после 2 звонков). */
+export const callAttempt = pgTable(
+  'call_attempt',
+  {
+    ...base,
+    orderId: uuid('order_id').notNull().references(() => order.id),
+    fromRole: callRoleEnum('from_role').notNull(),
+    at: ts('at').notNull(),
+  },
+  (t) => [index('call_attempt_order_idx').on(t.orderId, t.fromRole)],
+);

@@ -12,6 +12,13 @@ export type FailedAction = QueuedAction & { error: string };
 
 export const OFFLINE_LIMIT_MS = 30 * 60_000;
 
+/**
+ * Обрыв связи, а не ответ сервера: нет сети или шлюз (502–504) без кода ошибки API.
+ * Ответ API с кодом (например, 503 CALL_UNAVAILABLE) — это решение сервера, в очередь его не кладём.
+ */
+export const isConnectivityError = (e: unknown) =>
+  e instanceof ApiError && (e.code === 'NETWORK' || e.status === 0 || (e.status >= 502 && e.code === 'INTERNAL'));
+
 const load = (k: string): QueuedAction[] => {
   try {
     return JSON.parse(localStorage.getItem(k) ?? '[]') as QueuedAction[];
@@ -46,7 +53,7 @@ export function useOfflineQueue<T>(api: Api, storageKey: string, onResult: (data
           save(ref.current.slice(1));
           onResultRef.current(data);
         } catch (e) {
-          if (e instanceof ApiError && e.code !== 'NETWORK' && e.status !== 0 && e.status < 500) {
+          if (e instanceof ApiError && !isConnectivityError(e)) {
             save(ref.current.slice(1));
             setFailed((f) => [...f, { ...a, error: e.message }]);
           } else break; // нет связи — ждём
@@ -93,7 +100,7 @@ export async function postOrQueue<T>(
   try {
     return { queued: false, data: await api.post<T>(path, body, key) };
   } catch (e) {
-    if (e instanceof ApiError && (e.code === 'NETWORK' || e.status === 0 || e.status >= 502)) {
+    if (isConnectivityError(e)) {
       q.enqueue({ key, path, body, at: Date.now(), label });
       return { queued: true };
     }

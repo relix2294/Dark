@@ -369,6 +369,14 @@ function Tracking({ orderId, onBack, onRepeat }: { orderId: string; onBack: () =
       if (ev === 'order') setOrder(data as Order);
     });
   }, [orderId]);
+  // звонок курьеру через подменный номер: настоящие номера не видит ни клиент, ни курьер (ТЗ §9)
+  const callCourier = useMutation({
+    mutationFn: () => api.post<{ dial: string }>(`/orders/${orderId}/call-courier`),
+    onSuccess: (r) => {
+      window.location.href = `tel:${r.dial}`;
+    },
+    onError: setError,
+  });
   const cancel = useMutation({
     mutationFn: () => api.post<Order>(`/orders/${orderId}/cancel`, { reason: 'клиент' }),
     onSuccess: setOrder,
@@ -383,6 +391,9 @@ function Tracking({ orderId, onBack, onRepeat }: { orderId: string; onBack: () =
         {order.courier && (
           <div>
             Курьер: <b>{order.courier.name}</b>
+            <Button disabled={callCourier.isPending} onClick={() => callCourier.mutate()}>
+              📞 Позвонить
+            </Button>
             {order.courier.position && (
               <a className="muted" style={{ marginLeft: 8 }} href={`https://www.openstreetmap.org/?mlat=${order.courier.position.lat}&mlon=${order.courier.position.lon}#map=16/${order.courier.position.lat}/${order.courier.position.lon}`} target="_blank" rel="noreferrer">
                 на карте ↗

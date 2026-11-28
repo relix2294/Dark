@@ -36,8 +36,13 @@ export const TaskOrderView = z.object({
   package_barcode: z.string(),
   temp_zones: z.array(TempZone),
   address: z.object({ street: z.string(), house: z.string(), entrance: z.string().nullable(), floor: z.string().nullable(), flat: z.string().nullable(), comment: z.string().nullable(), geo: Geo }),
-  /** Маскированный телефон; звонок — через скрытый номер (этап 2). */
+  /** Маскированный телефон для узнавания («+992 ** *** 12 34»); звонить — только через call_number. */
   customer_phone_masked: z.string().nullable(),
+  /** Подменный номер клиента на время доставки: набирается и без связи с сервером. */
+  call_number: z.string().nullable(),
+  /** Звонков клиенту через подменный номер и время первого — «клиент не вышел» после 2 звонков и ожидания. */
+  calls_made: z.number().int(),
+  first_call_at: z.iso.datetime().nullable(),
   promised_at: z.iso.datetime().nullable(),
   total_dirams: Dirams,
 });
@@ -64,3 +69,8 @@ export const ShiftSummaryView = z.object({
   avg_delivery_min: z.number().int().nullable(),
   km: z.number(),
 });
+
+/** Позвонить через подменный номер: at — время нажатия, если запрос ждал связи. */
+export const CallRequest = z.object({ at: z.iso.datetime().optional() });
+/** Номер, который набирает телефон: подменный, настоящий номер собеседника не раскрывается. */
+export const CallView = z.object({ dial: z.string() });

@@ -21,7 +21,7 @@ export async function setupApp() {
     current = d;
   };
   await migrate(deps.db, { migrationsFolder: new URL('../drizzle', import.meta.url).pathname });
-  await deps.db.execute(sql`truncate table ${s.notification}, ${s.authAttempt}, ${s.orderRating}, ${s.devicePresence}, ${s.outbox}, ${s.idempotencyKey}, ${s.auditLog}, ${s.parameter}, ${s.stockMove}, ${s.stockLot}, ${s.cell},
+  await deps.db.execute(sql`truncate table ${s.notification}, ${s.authAttempt}, ${s.orderRating}, ${s.devicePresence}, ${s.callAttempt}, ${s.callSession}, ${s.outbox}, ${s.idempotencyKey}, ${s.auditLog}, ${s.parameter}, ${s.stockMove}, ${s.stockLot}, ${s.cell},
     ${s.promoUse}, ${s.promo}, ${s.paymentOp}, ${s.payment}, ${s.orderStatusLog}, ${s.orderItem}, ${s.order}, ${s.address}, ${s.customer},
     ${s.courier}, ${s.userStaff}, ${s.dish}, ${s.price}, ${s.product}, ${s.category}, ${s.deliveryZone}, ${s.store} cascade`);
   const app = await buildApp(deps);
@@ -48,7 +48,7 @@ export async function seedWorld(deps: Awaited<ReturnType<typeof setupApp>>['deps
     { storeId: store!.id, productId: p1!.id, cellId: cell!.id, qty: 10 },
     { storeId: store!.id, productId: p2!.id, cellId: cell!.id, qty: 1 },
   ]);
-  const [cust] = await db.insert(s.customer).values({ dcUserId: 'u-1' }).returning();
+  const [cust] = await db.insert(s.customer).values({ dcUserId: 'u-1', phone: '+992901112233', phoneMasked: '+992 ** *** 22 33' }).returning();
   const [addr] = await db.insert(s.address).values({ customerId: cust!.id, lat: 38.55, lon: 68.8, street: 'Рудаки', house: '1' }).returning();
   const { token } = await deps.tokens.sign({ kind: 'customer', customer_id: cust!.id, dc_user_id: 'u-1' });
   return { store: store!, p1: p1!, p2: p2!, cust: cust!, addr: addr!, token };

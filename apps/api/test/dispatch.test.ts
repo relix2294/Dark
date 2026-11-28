@@ -121,7 +121,16 @@ describe('курьер и диспетчер (ТЗ §6, §11)', () => {
     await dispatchStore(ctx.deps, w.store.id);
     const task = (await call('GET', '/api/v1/courier/tasks/current', courierTok)).json();
     await call('POST', `/api/v1/courier/tasks/${task.task_id}/pickup`, courierTok, { package_barcodes: [`PKG-${o.number}`] });
-    const ns = await call('POST', `/api/v1/courier/orders/${o.id}/no-show`, courierTok, { comment: '2 звонка' });
+    // без звонков и без ожидания у двери — нельзя (ТЗ §11)
+    let ns = await call('POST', `/api/v1/courier/orders/${o.id}/no-show`, courierTok, { comment: 'не открыл' });
+    expect(ns.json().error).toMatchObject({ code: 'INVALID_TRANSITION', details: { calls_made: 0 } });
+    const now0 = ctx.deps.clock.now();
+    for (let i = 0; i < 2; i++) expect((await call('POST', `/api/v1/courier/orders/${o.id}/call`, courierTok, {})).statusCode).toBe(200);
+    ns = await call('POST', `/api/v1/courier/orders/${o.id}/no-show`, courierTok, { comment: 'не открыл' });
+    expect(ns.json().error.message).toMatch(/Подождите у двери ещё 5 мин/);
+    ctx.setNow(new Date(now0.getTime() + 5 * 60_000));
+    ns = await call('POST', `/api/v1/courier/orders/${o.id}/no-show`, courierTok, { comment: 'не открыл' });
+    ctx.setNow(now0);
     expect(ns.statusCode, ns.body).toBe(200);
     expect(ns.json().status).toBe('failed');
     const [ord] = await ctx.deps.db.select().from(s.order).where(eq(s.order.id, o.id));

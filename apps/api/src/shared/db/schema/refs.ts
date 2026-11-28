@@ -104,6 +104,8 @@ export const customer = pgTable('customer', {
   ...base,
   dcUserId: text('dc_user_id').notNull().unique(),
   phoneMasked: text('phone_masked'),
+  /** Настоящий номер из DC: только для связки с подменным номером у провайдера, наружу не отдаётся. */
+  phone: text('phone'),
   name: text('name'),
   firstOrderAt: ts('first_order_at'),
   ordersCount: integer('orders_count').notNull().default(0),
