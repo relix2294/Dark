@@ -12,3 +12,5 @@
 | [006](006-clients-pwa-vs-native.md) | PWA для сборщика и кухни, Expo для курьера | принято |
 | [007](007-payments-adapter.md) | Платежи за адаптером с заглушкой | принято |
 | [008](008-realtime-notify.md) | Realtime через outbox и Postgres LISTEN/NOTIFY | принято |
+| [009](009-masked-calls.md) | Звонки курьер ↔ клиент через подменные номера | принято |
+| [010](010-courier-payouts-dc.md) | Оплата курьерам только безналично, выплаты через DC | принято |
